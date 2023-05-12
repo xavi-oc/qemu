@@ -57,6 +57,7 @@ util_ss.add(files(
   'sha512-internal.c',
   'sha384-internal.c',
   'sha256-internal.c',
+  'sha224-internal.c',
   'sha1-internal.c',
 ))
 if gnutls.found()
