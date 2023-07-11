@@ -59,6 +59,7 @@ util_ss.add(files(
   'sha256-internal.c',
   'sha224-internal.c',
   'sha1-internal.c',
+  'hmac256-internal.c',
 ))
 if gnutls.found()
   util_ss.add(gnutls)
