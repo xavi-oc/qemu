@@ -13,7 +13,6 @@
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "hw/registerfields.h"
-#include "hw/misc/esp32c3_reg.h"
 
 #define TYPE_ESP32C3_GDMA "esp32c3.gdma"
 #define ESP32C3_GDMA(obj) OBJECT_CHECK(ESP32C3GdmaState, (obj), TYPE_ESP32C3_GDMA)
