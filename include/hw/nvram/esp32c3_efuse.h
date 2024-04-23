@@ -12,7 +12,6 @@
 #include "hw/hw.h"
 #include "hw/registerfields.h"
 #include "hw/sysbus.h"
-#include "hw/misc/esp32c3_reg.h"
 #include "sysemu/block-backend.h"
 #include "qemu/error-report.h"
 
