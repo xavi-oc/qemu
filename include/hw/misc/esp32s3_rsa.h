@@ -14,22 +14,22 @@
 #include "hw/registerfields.h"
 
 
-#define TYPE_ESP32C3_RSA "misc.esp32c3.rsa"
-#define ESP32C3_RSA(obj) OBJECT_CHECK(ESP32C3RsaState, (obj), TYPE_ESP32C3_RSA)
+#define TYPE_ESP32S3_RSA "misc.esp32s3.rsa"
+#define ESP32S3_RSA(obj) OBJECT_CHECK(ESP32S3RsaState, (obj), TYPE_ESP32S3_RSA)
 
-#define ESP32C3_RSA_GET_CLASS(obj) OBJECT_GET_CLASS(ESP32C3RsaClass, obj, TYPE_ESP32C3_RSA)
-#define ESP32C3_RSA_CLASS(klass) OBJECT_CLASS_CHECK(ESP32C3RsaClass, klass, TYPE_ESP32C3_RSA)
+#define ESP32S3_RSA_GET_CLASS(obj) OBJECT_GET_CLASS(ESP32S3RsaClass, obj, TYPE_ESP32S3_RSA)
+#define ESP32S3_RSA_CLASS(klass) OBJECT_CLASS_CHECK(ESP32S3RsaClass, klass, TYPE_ESP32S3_RSA)
 
-#define ESP32C3_RSA_MEM_BLK_SIZE    384
+#define ESP32S3_RSA_MEM_BLK_SIZE    512
 
-typedef struct ESP32C3RsaState {
+typedef struct ESP32S3RsaState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
 
-    uint32_t m_mem[ESP32C3_RSA_MEM_BLK_SIZE / 4];
-    uint32_t z_mem[ESP32C3_RSA_MEM_BLK_SIZE / 4];
-    uint32_t y_mem[ESP32C3_RSA_MEM_BLK_SIZE / 4];
-    uint32_t x_mem[ESP32C3_RSA_MEM_BLK_SIZE / 4];
+    uint32_t m_mem[ESP32S3_RSA_MEM_BLK_SIZE / 4];
+    uint32_t z_mem[ESP32S3_RSA_MEM_BLK_SIZE / 4];
+    uint32_t y_mem[ESP32S3_RSA_MEM_BLK_SIZE / 4];
+    uint32_t x_mem[ESP32S3_RSA_MEM_BLK_SIZE / 4];
 
     /* Configuration registers */
     uint32_t mprime_reg;
@@ -41,13 +41,13 @@ typedef struct ESP32C3RsaState {
     /* Status/Control registers */
     uint32_t int_ena;
     qemu_irq irq;
-} ESP32C3RsaState;
+} ESP32S3RsaState;
 
-typedef struct ESP32C3RsaClass {
+typedef struct ESP32S3RsaClass {
     SysBusDeviceClass parent_class;
     /* Virtual methods*/
-    void (*rsa_exp_mod)(ESP32C3RsaState *s, uint32_t mode_reg, uint32_t *x_mem, uint32_t *y_mem, uint32_t *m_mem, uint32_t *z_mem, uint32_t int_ena);
-} ESP32C3RsaClass;
+    void (*rsa_exp_mod)(ESP32S3RsaState *s, uint32_t mode_reg, uint32_t *x_mem, uint32_t *y_mem, uint32_t *m_mem, uint32_t *z_mem, uint32_t int_ena);
+} ESP32S3RsaClass;
 
 
 REG32(RSA_MEM_M_BLOCK_BASE, 0x000)
