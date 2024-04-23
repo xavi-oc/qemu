@@ -13,36 +13,36 @@
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "hw/registerfields.h"
-#include "hw/misc/esp32c3_aes.h"
-#include "hw/misc/esp32c3_sha.h"
-#include "hw/misc/esp32c3_rsa.h"
-#include "hw/misc/esp32c3_hmac.h"
+#include "hw/misc/esp32s3_aes.h"
+#include "hw/misc/esp32s3_sha.h"
+#include "hw/misc/esp32s3_rsa.h"
+#include "hw/misc/esp32s3_hmac.h"
 
 
-#define TYPE_ESP32C3_DS "misc.esp32c3.ds"
-#define ESP32C3_DS(obj) OBJECT_CHECK(ESP32C3DsState, (obj), TYPE_ESP32C3_DS)
+#define TYPE_ESP32S3_DS "misc.esp32s3.ds"
+#define ESP32S3_DS(obj) OBJECT_CHECK(ESP32S3DsState, (obj), TYPE_ESP32S3_DS)
 
-#define ESP32C3_DS_KEY_SIZE 32
+#define ESP32S3_DS_KEY_SIZE 32
 
-#define ESP32C3_DS_REGS_SIZE (A_DS_DATE_REG + 4)
-#define ESP32C3_DS_MEM_BLK_SIZE 384
-#define ESP32C3_DS_BOX_MEM_BLK_SIZE 48
-#define ESP32C3_DS_IV_SIZE 16
-#define ESP32C3_DS_MPRIME_SIZE 4
-#define ESP32C3_DS_L_SIZE 4
-#define ESP32C3_DS_MD_SIZE 32
+#define ESP32S3_DS_REGS_SIZE (A_DS_DATE_REG + 4)
+#define ESP32S3_DS_MEM_BLK_SIZE 384
+#define ESP32S3_DS_BOX_MEM_BLK_SIZE 48
+#define ESP32S3_DS_IV_SIZE 16
+#define ESP32S3_DS_MPRIME_SIZE 4
+#define ESP32S3_DS_L_SIZE 4
+#define ESP32S3_DS_MD_SIZE 32
 
-#define ESP32C3_DS_CIPHERTEXT_SIZE (ESP32C3_DS_MEM_BLK_SIZE + \
-                                    ESP32C3_DS_MEM_BLK_SIZE + \
-                                    ESP32C3_DS_MEM_BLK_SIZE + \
-                                    ESP32C3_DS_BOX_MEM_BLK_SIZE)
+#define ESP32S3_DS_CIPHERTEXT_SIZE (ESP32S3_DS_MEM_BLK_SIZE + \
+                                    ESP32S3_DS_MEM_BLK_SIZE + \
+                                    ESP32S3_DS_MEM_BLK_SIZE + \
+                                    ESP32S3_DS_BOX_MEM_BLK_SIZE)
 
-#define ESP32C3_DS_CALC_MD_SIZE (ESP32C3_DS_MEM_BLK_SIZE + \
-                                ESP32C3_DS_MEM_BLK_SIZE + \
-                                ESP32C3_DS_MEM_BLK_SIZE + \
-                                ESP32C3_DS_MPRIME_SIZE + \
-                                ESP32C3_DS_L_SIZE + \
-                                ESP32C3_DS_IV_SIZE)
+#define ESP32S3_DS_CALC_MD_SIZE (ESP32S3_DS_MEM_BLK_SIZE + \
+                                ESP32S3_DS_MEM_BLK_SIZE + \
+                                ESP32S3_DS_MEM_BLK_SIZE + \
+                                ESP32S3_DS_MPRIME_SIZE + \
+                                ESP32S3_DS_L_SIZE + \
+                                ESP32S3_DS_IV_SIZE)
 
 typedef enum {
     DS_SIGNATURE_OK = 0,                    /**< Signature is valid and can be read. */
@@ -52,27 +52,27 @@ typedef enum {
 } ds_signature_check_t;
 
 
-typedef struct ESP32C3DsState {
+typedef struct ESP32S3DsState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
 
-    uint32_t y_mem[ESP32C3_DS_MEM_BLK_SIZE / 4];
-    uint32_t m_mem[ESP32C3_DS_MEM_BLK_SIZE / 4];
-    uint32_t rb_mem[ESP32C3_DS_MEM_BLK_SIZE / 4];
-    uint32_t box_mem[ESP32C3_DS_BOX_MEM_BLK_SIZE / 4];
-    uint32_t x_mem[ESP32C3_DS_MEM_BLK_SIZE / 4];
-    uint32_t z_mem[ESP32C3_DS_MEM_BLK_SIZE / 4];
-    uint32_t iv[ESP32C3_DS_IV_SIZE / 4];
+    uint32_t y_mem[ESP32S3_DS_MEM_BLK_SIZE / 4];
+    uint32_t m_mem[ESP32S3_DS_MEM_BLK_SIZE / 4];
+    uint32_t rb_mem[ESP32S3_DS_MEM_BLK_SIZE / 4];
+    uint32_t box_mem[ESP32S3_DS_BOX_MEM_BLK_SIZE / 4];
+    uint32_t x_mem[ESP32S3_DS_MEM_BLK_SIZE / 4];
+    uint32_t z_mem[ESP32S3_DS_MEM_BLK_SIZE / 4];
+    uint32_t iv[ESP32S3_DS_IV_SIZE / 4];
 
-    uint32_t ds_key[ESP32C3_DS_KEY_SIZE / 4];
+    uint32_t ds_key[ESP32S3_DS_KEY_SIZE / 4];
     ds_signature_check_t ds_signature_check;
 
-    ESP32C3HmacState *hmac;
-    ESP32C3AesState *aes;
-    ESP32C3RsaState *rsa;
-    ESP32C3ShaState *sha;
+    ESP32S3HmacState *hmac;
+    ESP32S3AesState *aes;
+    ESP32S3RsaState *rsa;
+    ESP32S3ShaState *sha;
 
-} ESP32C3DsState;
+} ESP32S3DsState;
 
 
 REG32(DS_MEM_Y_BLOCK_BASE, 0x0000)
