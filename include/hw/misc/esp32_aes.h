@@ -3,7 +3,6 @@
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "hw/registerfields.h"
-#include "hw/misc/esp32_reg.h"
 
 #define TYPE_ESP32_AES "misc.esp32.aes"
 #define ESP32_AES(obj) OBJECT_CHECK(Esp32AesState, (obj), TYPE_ESP32_AES)
