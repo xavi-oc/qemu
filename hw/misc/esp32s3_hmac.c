@@ -1,5 +1,5 @@
 /*
- * ESP32-C3 HMAC emulation
+ * ESP32S3 HMAC emulation
  *
  * Copyright (c) 2023 Espressif Systems (Shanghai) Co. Ltd.
  *
@@ -11,15 +11,14 @@
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "hw/nvram/esp32c3_efuse.h"
-#include "hw/misc/esp32c3_hmac.h"
-#include "hw/nvram/esp32c3_efuse.h"
+#include "hw/misc/esp32s3_hmac.h"
 #include "qemu/bswap.h"
 #include "qemu/error-report.h"
 
 #define HMAC_WARNING 0
 #define HMAC_DEBUG   0
 
-static void esp32c3_hmac_start(ESP32C3HmacState *s)
+static void esp32s3_hmac_start(ESP32S3HmacState *s)
 {
     uint8_t efuse_key[32];
     esp32c3_efuse_get_key(s->efuse, s->efuse_block_num, efuse_key);
@@ -28,21 +27,21 @@ static void esp32c3_hmac_start(ESP32C3HmacState *s)
 }
 
 
-static void esp32c3_hmac_update(ESP32C3HmacState *s, uint32_t *message)
+static void esp32s3_hmac_update(ESP32S3HmacState *s, uint32_t *message)
 {
     hmac_sha256_update(&s->ctx, (uint8_t*)(message));
 }
 
 
-static void esp32c3_hmac_finish(ESP32C3HmacState *s, uint32_t *result)
+static void esp32s3_hmac_finish(ESP32S3HmacState *s, uint32_t *result)
 {
     hmac_sha256_final(&s->ctx, (uint8_t*) result, sizeof(result));
 }
 
 
-static uint64_t esp32c3_hmac_read(void *opaque, hwaddr addr, unsigned int size)
+static uint64_t esp32s3_hmac_read(void *opaque, hwaddr addr, unsigned int size)
 {
-    ESP32C3HmacState *s = ESP32C3_HMAC(opaque);
+    ESP32S3HmacState *s = ESP32S3_HMAC(opaque);
 
     uint64_t r = 0;
     switch (addr) {
@@ -78,18 +77,18 @@ static uint64_t esp32c3_hmac_read(void *opaque, hwaddr addr, unsigned int size)
 }
 
 
-static void esp32c3_hmac_write(void *opaque, hwaddr addr,
+static void esp32s3_hmac_write(void *opaque, hwaddr addr,
                        uint64_t value, unsigned int size)
 {
-    ESP32C3HmacClass *class = ESP32C3_HMAC_GET_CLASS(opaque);
-    ESP32C3HmacState *s = ESP32C3_HMAC(opaque);
+    ESP32S3HmacClass *class = ESP32S3_HMAC_GET_CLASS(opaque);
+    ESP32S3HmacState *s = ESP32S3_HMAC(opaque);
 
     switch (addr) {
         case A_HMAC_SET_START_REG:
             break;
 
         case A_HMAC_SET_PARA_FINISH_REG:
-            esp32c3_hmac_start(s);
+            esp32s3_hmac_start(s);
             break;
 
         case A_HMAC_SET_MESSAGE_ONE_REG:
@@ -130,7 +129,7 @@ static void esp32c3_hmac_write(void *opaque, hwaddr addr,
 
         case A_HMAC_ONE_BLOCK_REG:
             s->message_write_complete = 1;
-            esp32c3_hmac_finish(s, s->result);
+            esp32s3_hmac_finish(s, s->result);
             break;
 
         case A_HMAC_SET_MESSAGE_END_REG:
@@ -151,15 +150,15 @@ static void esp32c3_hmac_write(void *opaque, hwaddr addr,
 }
 
 
-static const MemoryRegionOps esp32c3_hmac_ops = {
-    .read =  esp32c3_hmac_read,
-    .write = esp32c3_hmac_write,
+static const MemoryRegionOps esp32s3_hmac_ops = {
+    .read =  esp32s3_hmac_read,
+    .write = esp32s3_hmac_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
-static void esp32c3_hmac_reset(DeviceState *dev)
+static void esp32s3_hmac_reset(DeviceState *dev)
 {
-    ESP32C3HmacState *s = ESP32C3_HMAC(dev);
+    ESP32S3HmacState *s = ESP32S3_HMAC(dev);
     memset(s->message, 0, sizeof(s->message));
     memset(s->result, 0, sizeof(s->result));
 
@@ -168,9 +167,9 @@ static void esp32c3_hmac_reset(DeviceState *dev)
     s->message_write_complete = 0;
 }
 
-static void esp32c3_hmac_realize(DeviceState *dev, Error **errp)
+static void esp32s3_hmac_realize(DeviceState *dev, Error **errp)
 {
-    ESP32C3HmacState *s = ESP32C3_HMAC(dev);
+    ESP32S3HmacState *s = ESP32S3_HMAC(dev);
 
     /* Make sure Efuse was set of issue an error */
     if (s->efuse == NULL) {
@@ -178,40 +177,40 @@ static void esp32c3_hmac_realize(DeviceState *dev, Error **errp)
     }
 }
 
-static void esp32c3_hmac_init(Object *obj)
+static void esp32s3_hmac_init(Object *obj)
 {
-    ESP32C3HmacState *s = ESP32C3_HMAC(obj);
+    ESP32S3HmacState *s = ESP32S3_HMAC(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
-    memory_region_init_io(&s->iomem, obj, &esp32c3_hmac_ops, s,
-                          TYPE_ESP32C3_HMAC, ESP32C3_HMAC_REGS_SIZE);
+    memory_region_init_io(&s->iomem, obj, &esp32s3_hmac_ops, s,
+                          TYPE_ESP32S3_HMAC, ESP32S3_HMAC_REGS_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
 }
 
-static void esp32c3_hmac_class_init(ObjectClass *klass, void *data)
+static void esp32s3_hmac_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
-    ESP32C3HmacClass* esp32c3_hmac = ESP32C3_HMAC_CLASS(klass);
+    ESP32S3HmacClass* esp32s3_hmac = ESP32S3_HMAC_CLASS(klass);
 
-    dc->realize = esp32c3_hmac_realize;
-    dc->reset = esp32c3_hmac_reset;
+    dc->realize = esp32s3_hmac_realize;
+    dc->reset = esp32s3_hmac_reset;
 
-    esp32c3_hmac->hmac_update = esp32c3_hmac_update;
-    esp32c3_hmac->hmac_finish = esp32c3_hmac_finish;
+    esp32s3_hmac->hmac_update = esp32s3_hmac_update;
+    esp32s3_hmac->hmac_finish = esp32s3_hmac_finish;
 }
 
-static const TypeInfo esp32c3_hmac_info = {
-    .name = TYPE_ESP32C3_HMAC,
+static const TypeInfo esp32s3_hmac_info = {
+    .name = TYPE_ESP32S3_HMAC,
     .parent = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(ESP32C3HmacState),
-    .instance_init = esp32c3_hmac_init,
-    .class_init = esp32c3_hmac_class_init,
-    .class_size = sizeof(ESP32C3HmacClass)
+    .instance_size = sizeof(ESP32S3HmacState),
+    .instance_init = esp32s3_hmac_init,
+    .class_init = esp32s3_hmac_class_init,
+    .class_size = sizeof(ESP32S3HmacClass)
 };
 
-static void esp32c3_hmac_register_types(void)
+static void esp32s3_hmac_register_types(void)
 {
-    type_register_static(&esp32c3_hmac_info);
+    type_register_static(&esp32s3_hmac_info);
 }
 
-type_init(esp32c3_hmac_register_types)
+type_init(esp32s3_hmac_register_types)

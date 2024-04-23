@@ -5,20 +5,20 @@
 #include "hw/registerfields.h"
 #include "crypto/hmac256_i.h"
 
-#define TYPE_ESP32C3_HMAC "misc.esp32c3.hmac"
-#define ESP32C3_HMAC(obj) OBJECT_CHECK(ESP32C3HmacState, (obj), TYPE_ESP32C3_HMAC)
+#define TYPE_ESP32S3_HMAC "misc.esp32s3.hmac"
+#define ESP32S3_HMAC(obj) OBJECT_CHECK(ESP32S3HmacState, (obj), TYPE_ESP32S3_HMAC)
 
-#define ESP32C3_HMAC_GET_CLASS(obj) OBJECT_GET_CLASS(ESP32C3HmacClass, obj, TYPE_ESP32C3_HMAC)
-#define ESP32C3_HMAC_CLASS(klass) OBJECT_CLASS_CHECK(ESP32C3HmacClass, klass, TYPE_ESP32C3_HMAC)
+#define ESP32S3_HMAC_GET_CLASS(obj) OBJECT_GET_CLASS(ESP32S3HmacClass, obj, TYPE_ESP32S3_HMAC)
+#define ESP32S3_HMAC_CLASS(klass) OBJECT_CLASS_CHECK(ESP32S3HmacClass, klass, TYPE_ESP32S3_HMAC)
 
-#define ESP32C3_HMAC_REGS_SIZE (0xFF)
+#define ESP32S3_HMAC_REGS_SIZE (0xFF)
 
-#define ESP32C3_HMAC_WR_MESSAGE_REG_CNT 16
-#define ESP32C3_HMAC_RD_RESULT_REG_CNT  8
+#define ESP32S3_HMAC_WR_MESSAGE_REG_CNT 16
+#define ESP32S3_HMAC_RD_RESULT_REG_CNT  8
 
 /* HMAC modes */
-#define ESP32C3_HMAC_MODE_UPSTREAM 0
-#define ESP32C3_HMAC_MODE_DOWNSTREAM 1
+#define ESP32S3_HMAC_MODE_UPSTREAM 0
+#define ESP32S3_HMAC_MODE_DOWNSTREAM 1
 
 typedef enum {
 	HMAC_KEY0 = 0,
@@ -30,7 +30,7 @@ typedef enum {
 	HMAC_KEY_MAX
 } HmacKeyId;
 
-typedef struct ESP32C3HmacState {
+typedef struct ESP32S3HmacState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
 
@@ -40,16 +40,16 @@ typedef struct ESP32C3HmacState {
     uint32_t efuse_block_num;
     uint32_t efuse_key_purpose;
     uint32_t message_write_complete;
-    uint32_t result[ESP32C3_HMAC_RD_RESULT_REG_CNT];
+    uint32_t result[ESP32S3_HMAC_RD_RESULT_REG_CNT];
     ESP32C3EfuseState *efuse;
-} ESP32C3HmacState;
+} ESP32S3HmacState;
 
-typedef struct ESP32C3HmacClass {
+typedef struct ESP32S3HmacClass {
     SysBusDeviceClass parent_class;
     /* Virtual methods*/
-    void (*hmac_update)(ESP32C3HmacState *s, uint32_t *message);
-    void (*hmac_finish)(ESP32C3HmacState *s, uint32_t *result);
-} ESP32C3HmacClass;
+    void (*hmac_update)(ESP32S3HmacState *s, uint32_t *message);
+    void (*hmac_finish)(ESP32S3HmacState *s, uint32_t *result);
+} ESP32S3HmacClass;
 
 
 REG32(HMAC_WR_MESSAGE_0_REG, 0x080)
@@ -127,5 +127,5 @@ REG32(HMAC_SOFT_JTAG_CTRL_REG, 0x0F8)
 REG32(HMAC_WR_JTAG_REG, 0x0FC)
     FIELD(HMAC_WR_JTAG_REG, HMAC_WR_TAG, 0, 32)
 
-REG32(HMAC_DATE_REG, 0x0F8)
+REG32(HMAC_DATE_REG, 0x1FC)
     FIELD(HMAC_DATE_REG, HMAC_DATE, 0, 30)
