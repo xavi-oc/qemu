@@ -18,7 +18,7 @@
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
 #include "hw/ssi/ssi.h"
-#include "hw/ssi/esp32c3_spi.h"
+#include "hw/ssi/esp32s3_spi.h"
 #include "qemu/error-report.h"
 
 #define SPI1_DEBUG      0
@@ -42,7 +42,7 @@ enum {
 };
 
 
-typedef struct ESP32C3SpiTransaction {
+typedef struct ESP32S3SpiTransaction {
     uint32_t cmd;
     uint32_t cmd_bytes;
 
@@ -54,12 +54,12 @@ typedef struct ESP32C3SpiTransaction {
     void* data;
     uint32_t tx_bytes;
     uint32_t rx_bytes;
-} ESP32C3SpiTransaction;
+} ESP32S3SpiTransaction;
 
 
-static uint64_t esp32c3_spi_read(void *opaque, hwaddr addr, unsigned int size)
+static uint64_t esp32s3_spi_read(void *opaque, hwaddr addr, unsigned int size)
 {
-    ESP32C3SpiState *s = ESP32C3_SPI(opaque);
+    ESP32S3SpiState *s = ESP32S3_SPI(opaque);
 
     uint64_t r = 0;
     switch (addr) {
@@ -120,7 +120,7 @@ static uint64_t esp32c3_spi_read(void *opaque, hwaddr addr, unsigned int size)
 }
 
 
-static void esp32c3_spi_txrx_buffer(ESP32C3SpiState *s,
+static void esp32s3_spi_txrx_buffer(ESP32S3SpiState *s,
                                     const void *tx, int tx_bytes,
                                     void *rx, int rx_bytes)
 {
@@ -137,33 +137,34 @@ static void esp32c3_spi_txrx_buffer(ESP32C3SpiState *s,
     }
 }
 
-static void esp32c3_spi_dummy_cycles(ESP32C3SpiState *s, uint32_t dummy_bytes) {
+static void esp32s3_spi_dummy_cycles(ESP32S3SpiState *s, uint32_t dummy_bytes) {
     for (int i = 0; i < dummy_bytes; i++) {
         ssi_transfer(s->spi, 0);
     }
 }
 
-static void esp32c3_spi_perform_transaction(ESP32C3SpiState *s, ESP32C3SpiTransaction *t)
+static void esp32s3_spi_perform_transaction(ESP32S3SpiState *s, ESP32S3SpiTransaction *t)
 {
     if (s->xts_aes != NULL)
     {
-        ESP32C3XtsAesClass *xts_aes_class = ESP32C3_XTS_AES_GET_CLASS(s->xts_aes);
+        ESP32S3XtsAesClass *xts_aes_class = ESP32S3_XTS_AES_GET_CLASS(s->xts_aes);
         bool man_enc_enabled = xts_aes_class->is_manual_enc_enabled(s->xts_aes);
 
         if (man_enc_enabled && xts_aes_class->is_ciphertext_spi_visible(s->xts_aes) && (t->cmd == CMD_PP)) {
             xts_aes_class->read_ciphertext(s->xts_aes, t->data, &(t->tx_bytes), &(t->addr), &(t->addr_bytes));
         }
     }
+
     qemu_set_irq(s->cs_gpio[0], 0);
-    esp32c3_spi_txrx_buffer(s, &t->cmd, t->cmd_bytes, NULL, 0);
-    esp32c3_spi_txrx_buffer(s, &t->addr, t->addr_bytes, NULL, 0);
-    esp32c3_spi_dummy_cycles(s, t->dummy_bytes);
-    esp32c3_spi_txrx_buffer(s, t->data, t->tx_bytes, t->data, t->rx_bytes);
+    esp32s3_spi_txrx_buffer(s, &t->cmd, t->cmd_bytes, NULL, 0);
+    esp32s3_spi_txrx_buffer(s, &t->addr, t->addr_bytes, NULL, 0);
+    esp32s3_spi_dummy_cycles(s, t->dummy_bytes);
+    esp32s3_spi_txrx_buffer(s, t->data, t->tx_bytes, t->data, t->rx_bytes);
     qemu_set_irq(s->cs_gpio[0], 1);
 }
 
 
-static inline void esp32c3_spi_get_addr(ESP32C3SpiState *s, uint32_t* addr, uint32_t* len)
+static inline void esp32s3_spi_get_addr(ESP32S3SpiState *s, uint32_t* addr, uint32_t* len)
 {
     const uint32_t address = FIELD_EX32(s->mem_addr, SPI_MEM_ADDR, USR_ADDR_VALUE);
     /* SPI Flash expects the address to be sent with MSB first. We make the assumption that
@@ -174,7 +175,7 @@ static inline void esp32c3_spi_get_addr(ESP32C3SpiState *s, uint32_t* addr, uint
     *len = (address_len + 1) / 8;
 }
 
-static inline void esp32c3_spi_get_dummy(ESP32C3SpiState *s, uint32_t* len)
+static inline void esp32s3_spi_get_dummy(ESP32S3SpiState *s, uint32_t* len)
 {
     const uint32_t dummy_count = FIELD_EX32(s->mem_user1, SPI_MEM_USER1, USR_DUMMY_CYCLELEN);
 
@@ -190,9 +191,9 @@ static inline void esp32c3_spi_get_dummy(ESP32C3SpiState *s, uint32_t* len)
     *len = (dummy_count + 7) / 8;
 }
 
-static void esp32c3_spi_begin_transaction(ESP32C3SpiState *s)
+static void esp32s3_spi_begin_transaction(ESP32S3SpiState *s)
 {
-    ESP32C3SpiTransaction t = {
+    ESP32S3SpiTransaction t = {
         .data = s->data_reg
      };
 
@@ -217,31 +218,31 @@ static void esp32c3_spi_begin_transaction(ESP32C3SpiState *s)
 
     /* Get the address and its length, in bytes */
     if (s->mem_user & R_SPI_MEM_USER_USR_ADDR_MASK) {
-        esp32c3_spi_get_addr(s, &t.addr, &t.addr_bytes);
+        esp32s3_spi_get_addr(s, &t.addr, &t.addr_bytes);
         if (t.addr_bytes > 0 && t.addr_bytes <= 4) {
             t.addr = t.addr >> (32 - t.addr_bytes * 8);
         }
 
         /* Only calculate and include dummy cycles when the USR_DUMMY bit is set! */
         if (s->mem_user & R_SPI_MEM_USER_USR_DUMMY_MASK) {
-            esp32c3_spi_get_dummy(s, &t.dummy_bytes);
+            esp32s3_spi_get_dummy(s, &t.dummy_bytes);
         }
     }
 
-    esp32c3_spi_perform_transaction(s, &t);
+    esp32s3_spi_perform_transaction(s, &t);
 }
 
 
-static void esp32c3_spi_special_command(ESP32C3SpiState *s, uint32_t command)
+static void esp32s3_spi_special_command(ESP32S3SpiState *s, uint32_t command)
 {
-    ESP32C3SpiTransaction t= {
+    ESP32S3SpiTransaction t= {
         .cmd_bytes = 1
     };
 
     switch (command >> 19 << 19) {
         case R_SPI_MEM_CMD_FLASH_READ_MASK:
             t.cmd = CMD_READ;
-            esp32c3_spi_get_addr(s, &t.addr, &t.addr_bytes);
+            esp32s3_spi_get_addr(s, &t.addr, &t.addr_bytes);
             t.addr = t.addr >> (32 - t.addr_bytes * 8);
             t.data = s->data_reg;
             t.rx_bytes = (FIELD_EX32(s->mem_miso_len, SPI_MEM_MISO_DLEN, USR_MISO_DBITLEN) + 1) / 8;
@@ -276,12 +277,12 @@ static void esp32c3_spi_special_command(ESP32C3SpiState *s, uint32_t command)
         case R_SPI_MEM_CMD_FLASH_PP_MASK:
             t.cmd = CMD_PP;
             t.data = s->data_reg;
-            esp32c3_spi_get_addr(s, &t.addr, &t.addr_bytes);
+            esp32s3_spi_get_addr(s, &t.addr, &t.addr_bytes);
             /* The number of bytes to process is in the upper-byte of address */
             t.tx_bytes = (s->mem_addr >> 24) & 0xff;
             /**
              * Page program expects a 24-bit page address, if the one written in mem_addr was
-             * 0xNN_33_00_02 (where is "do not care"), after calling `esp32c3_spi_get_addr`, the
+             * 0xNN_33_00_02 (where is "do not care"), after calling `esp32s3_spi_get_addr`, the
              * address becomes 0x02_00_33_NN. Thus, if we cast it to a byte array, arr[0] would give
              * `NN`, instead of `33`. We need to adjust the value in address.
              */
@@ -290,7 +291,7 @@ static void esp32c3_spi_special_command(ESP32C3SpiState *s, uint32_t command)
 
         case R_SPI_MEM_CMD_FLASH_SE_MASK:
             t.cmd = CMD_SE;
-            esp32c3_spi_get_addr(s, &t.addr, &t.addr_bytes);
+            esp32s3_spi_get_addr(s, &t.addr, &t.addr_bytes);
             /* For the same reasons as explained above, we need to adjust `t.addr`, but here, the shift
              * to perform is not fixed and depends on the address length */
             t.addr = t.addr >> (32 - t.addr_bytes * 8);
@@ -298,7 +299,7 @@ static void esp32c3_spi_special_command(ESP32C3SpiState *s, uint32_t command)
 
         case R_SPI_MEM_CMD_FLASH_BE_MASK:
             t.cmd = CMD_BE;
-            esp32c3_spi_get_addr(s, &t.addr, &t.addr_bytes);
+            esp32s3_spi_get_addr(s, &t.addr, &t.addr_bytes);
             t.addr = t.addr >> (32 - t.addr_bytes * 8);
             break;
 
@@ -329,14 +330,14 @@ static void esp32c3_spi_special_command(ESP32C3SpiState *s, uint32_t command)
 #endif
             return;
     }
-    esp32c3_spi_perform_transaction(s, &t);
+    esp32s3_spi_perform_transaction(s, &t);
 }
 
 
-static void esp32c3_spi_write(void *opaque, hwaddr addr,
+static void esp32s3_spi_write(void *opaque, hwaddr addr,
                        uint64_t value, unsigned int size)
 {
-    ESP32C3SpiState *s = ESP32C3_SPI(opaque);
+    ESP32S3SpiState *s = ESP32S3_SPI(opaque);
     uint32_t wvalue = (uint32_t) value;
 
 #if SPI1_DEBUG
@@ -346,9 +347,9 @@ static void esp32c3_spi_write(void *opaque, hwaddr addr,
     switch (addr) {
         case A_SPI_MEM_CMD:
             if(wvalue & R_SPI_MEM_CMD_USR_MASK) {
-                esp32c3_spi_begin_transaction(s);
+                esp32s3_spi_begin_transaction(s);
             } else {
-                esp32c3_spi_special_command(s, wvalue);
+                esp32s3_spi_special_command(s, wvalue);
             }
             break;
         case A_SPI_MEM_ADDR:
@@ -400,16 +401,16 @@ static void esp32c3_spi_write(void *opaque, hwaddr addr,
 }
 
 
-static const MemoryRegionOps esp32c3_spi_ops = {
-    .read =  esp32c3_spi_read,
-    .write = esp32c3_spi_write,
+static const MemoryRegionOps esp32s3_spi_ops = {
+    .read =  esp32s3_spi_read,
+    .write = esp32s3_spi_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
-static void esp32c3_spi_reset(DeviceState *dev)
+static void esp32s3_spi_reset(DeviceState *dev)
 {
-    ESP32C3SpiState *s = ESP32C3_SPI(dev);
-    memset(s->data_reg, 0, ESP32C3_SPI_BUF_WORDS * sizeof(uint32_t));
+    ESP32S3SpiState *s = ESP32S3_SPI(dev);
+    memset(s->data_reg, 0, ESP32S3_SPI_BUF_WORDS * sizeof(uint32_t));
     s->mem_ctrl1 = FIELD_DP32(s->mem_ctrl1, SPI_MEM_CTRL1, CS_HOLD_DLY_RES, 0x3ff);
     s->mem_clock = FIELD_DP32(s->mem_clock, SPI_MEM_CLOCK, CLKCNT_N, 3);
     s->mem_clock = FIELD_DP32(s->mem_clock, SPI_MEM_CLOCK, CLKCNT_H, 1);
@@ -426,9 +427,9 @@ static void esp32c3_spi_reset(DeviceState *dev)
      * update this function with their default values */
 }
 
-static void esp32c3_spi_realize(DeviceState *dev, Error **errp)
+static void esp32s3_spi_realize(DeviceState *dev, Error **errp)
 {
-    ESP32C3SpiState *s = ESP32C3_SPI(dev);
+    ESP32S3SpiState *s = ESP32S3_SPI(dev);
 
     /* Make sure XTS_AES was set or issue an error */
     if (s->xts_aes == NULL) {
@@ -437,46 +438,46 @@ static void esp32c3_spi_realize(DeviceState *dev, Error **errp)
 
 }
 
-static void esp32c3_spi_init(Object *obj)
+static void esp32s3_spi_init(Object *obj)
 {
-    ESP32C3SpiState *s = ESP32C3_SPI(obj);
+    ESP32S3SpiState *s = ESP32S3_SPI(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
-    memory_region_init_io(&s->iomem, obj, &esp32c3_spi_ops, s,
-                          TYPE_ESP32C3_SPI, ESP32C3_SPI_IO_SIZE);
+    memory_region_init_io(&s->iomem, obj, &esp32s3_spi_ops, s,
+                          TYPE_ESP32S3_SPI, ESP32S3_SPI_IO_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
     // sysbus_init_irq(sbd, &s->irq);
 
-    esp32c3_spi_reset(DEVICE(s));
+    esp32s3_spi_reset(DEVICE(s));
 
     s->spi = ssi_create_bus(DEVICE(s), "spi");
-    qdev_init_gpio_out_named(DEVICE(s), &s->cs_gpio[0], SSI_GPIO_CS, ESP32C3_SPI_CS_COUNT);
+    qdev_init_gpio_out_named(DEVICE(s), &s->cs_gpio[0], SSI_GPIO_CS, ESP32S3_SPI_CS_COUNT);
 }
 
-static Property esp32c3_spi_properties[] = {
+static Property esp32s3_spi_properties[] = {
     DEFINE_PROP_END_OF_LIST(),
 };
 
-static void esp32c3_spi_class_init(ObjectClass *klass, void *data)
+static void esp32s3_spi_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = esp32c3_spi_reset;
-    dc->realize = esp32c3_spi_realize;
-    device_class_set_props(dc, esp32c3_spi_properties);
+    dc->reset = esp32s3_spi_reset;
+    dc->realize = esp32s3_spi_realize;
+    device_class_set_props(dc, esp32s3_spi_properties);
 }
 
-static const TypeInfo esp32c3_spi_info = {
-    .name = TYPE_ESP32C3_SPI,
+static const TypeInfo esp32s3_spi_info = {
+    .name = TYPE_ESP32S3_SPI,
     .parent = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(ESP32C3SpiState),
-    .instance_init = esp32c3_spi_init,
-    .class_init = esp32c3_spi_class_init
+    .instance_size = sizeof(ESP32S3SpiState),
+    .instance_init = esp32s3_spi_init,
+    .class_init = esp32s3_spi_class_init
 };
 
-static void esp32c3_spi_register_types(void)
+static void esp32s3_spi_register_types(void)
 {
-    type_register_static(&esp32c3_spi_info);
+    type_register_static(&esp32s3_spi_info);
 }
 
-type_init(esp32c3_spi_register_types)
+type_init(esp32s3_spi_register_types)
