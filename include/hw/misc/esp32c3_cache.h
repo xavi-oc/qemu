@@ -1,6 +1,5 @@
 #pragma once
 
-#include "hw/misc/esp32c3_reg.h"
 #include "hw/sysbus.h"
 #include "hw/hw.h"
 #include "hw/registerfields.h"

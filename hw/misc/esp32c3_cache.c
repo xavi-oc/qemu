@@ -22,6 +22,7 @@
 #include "hw/misc/esp32c3_cache.h"
 #include "hw/misc/esp32c3_xts_aes.h"
 #include "sysemu/block-backend-io.h"
+#include "hw/misc/esp32c3_reg.h"
 
 
 #define CACHE_DEBUG      0
