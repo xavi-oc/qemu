@@ -83,6 +83,7 @@ static void esp32c3_virtual_counter_reset(ESP32C3VirtualCounter* counter)
     timer_del(&counter->timer);
     counter->base = 0;
     counter->value = 0;
+    counter->frequency = 160000000; // Hz
 }
 
 
@@ -552,13 +553,13 @@ static uint64_t esp32c3_timg_read(void *opaque, hwaddr addr, unsigned int size)
 
         default:
 #if TIMG_WARNING
-            warn_report("[TIMG] Unsupported read from %08lx\n", addr);
+            warn_report("[TIMG] Unsupported read from %08lx", addr);
 #endif
             break;
     }
 
 #if TIMG_DEBUG
-    info_report("[TIMG] Reading from %08lx (%08lx)\n", addr, r);
+    info_report("[TIMG] Reading from %08lx (%08lx)", addr, r);
 #endif
     return r;
 }
@@ -647,13 +648,13 @@ static void esp32c3_timg_write(void *opaque, hwaddr addr,
 
         default:
 #if TIMG_WARNING
-            warn_report("[TIMG] Unsupported write to %08lx (%08lx)\n", addr, value);
+            warn_report("[TIMG] Unsupported write to %08lx (%08lx)", addr, value);
 #endif
             break;
     }
 
 #if TIMG_DEBUG
-    info_report("[TIMG] Writing to %08lx = %08lx\n", addr, value);
+    info_report("[TIMG] Writing to %08lx = %08lx", addr, value);
 #endif
 }
 
