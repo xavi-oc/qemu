@@ -85,7 +85,7 @@ static void xtensa_set_irq(void *opaque, int irq, int active)
 static void xtensa_ccompare_cb(void *opaque)
 {
     XtensaCcompareTimer *ccompare = opaque;
-    CPUXtensaState *env = ccompare->env;
+    CPUXtensaState *env = (CPUXtensaState*)ccompare->env;
     unsigned i = ccompare - env->ccompare;
 
     qemu_set_irq(env->irq_inputs[env->config->timerint[i]], 1);
@@ -107,7 +107,7 @@ void xtensa_irq_init(CPUXtensaState *env)
         env->time_base = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
         env->ccount_base = env->sregs[CCOUNT];
         for (i = 0; i < env->config->nccompare; ++i) {
-            env->ccompare[i].env = env;
+            env->ccompare[i].env = (struct CPUArchState*)env;
             env->ccompare[i].timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                     xtensa_ccompare_cb, env->ccompare + i);
         }
