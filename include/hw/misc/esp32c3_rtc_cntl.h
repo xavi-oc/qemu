@@ -4,8 +4,6 @@
 #include "hw/sysbus.h"
 #include "hw/registerfields.h"
 
-#include "hw/misc/esp32c3_reg.h"
-
 #define TYPE_ESP32C3_RTC_CNTL "misc.esp32c3.rtc_cntl"
 #define ESP32C3_RTC_CNTL(obj) OBJECT_CHECK(ESP32C3RtcCntlState, (obj), TYPE_ESP32C3_RTC_CNTL)
 
