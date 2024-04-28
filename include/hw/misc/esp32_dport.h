@@ -3,7 +3,6 @@
 #include "hw/hw.h"
 #include "hw/registerfields.h"
 #include "hw/sysbus.h"
-#include "hw/misc/esp32_reg.h"
 #include "sysemu/block-backend.h"
 #include "hw/misc/esp32_flash_enc.h"
 

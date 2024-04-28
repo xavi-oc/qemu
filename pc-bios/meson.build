@@ -57,6 +57,7 @@ blobs = [
   'efi-e1000e.rom',
   'efi-vmxnet3.rom',
   'esp32-v3-rom.bin',
+  'esp32s3_rev0_rom.bin',
   'esp32-v3-rom-app.bin',
   'esp32c3-rom.bin',
   'qemu-nsis.bmp',
