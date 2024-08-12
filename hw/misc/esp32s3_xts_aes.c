@@ -1,5 +1,5 @@
 /*
- * ESP32-C3 XTS-AES emulation
+ * ESP32-S3 XTS-AES emulation
  *
  * Copyright (c) 2023 Espressif Systems (Shanghai) Co. Ltd.
  *
@@ -21,6 +21,7 @@
 #define EFUSE_KEY_PURPOSE_XTS_AES_128_KEY 4
 #define XTS_AES_KEY_SIZE 32
 #define ESP32S3_XTS_AES_DATA_UNIT_SIZE 128
+#define ESP32S3_XTS_AES_TWEAK_VALUE 0x3FFFFF80
 
 struct xts_aes_keys_ctx {
     AES_KEY enc;
@@ -67,6 +68,20 @@ static bool esp32s3_xts_aes_is_flash_enc_enabled(ESP32S3XtsAesState *s)
     return (ctpop32(spi_boot_crypt_cnt) & 1);
 }
 
+static uint32_t esp32s3_xts_aes_get_linesize(ESP32S3XtsAesState *s)
+{
+    if (s->linesize == 0) {
+        return 16;
+    } else if (s->linesize == 1) {
+        return 32;
+    } else if (s->linesize == 2) {
+        return 64;
+    } else {
+        error_report("[XTS-AES] Incorrect value of linesize");
+        return 0;
+    }
+}
+
 static void esp32s3_xts_aes_get_key(ESP32S3XtsAesState *s, uint8_t *key)
 {
     for (int i = EFUSE_BLOCK_KEY0; i < EFUSE_BLOCK_KEY6; i++) {
@@ -87,7 +102,7 @@ static void esp32s3_xts_aes_get_key(ESP32S3XtsAesState *s, uint8_t *key)
 
 static void esp32s3_xts_aes_read_ciphertext(ESP32S3XtsAesState *s, uint32_t* spi_data_regs, uint32_t* spi_data_size, uint32_t* spi_addr, uint32_t* spi_addr_size)
 {
-    *spi_data_size = s->linesize == 0 ? 16 : 32;
+    *spi_data_size = esp32s3_xts_aes_get_linesize(s);
     memcpy(spi_data_regs, s->ciphertext, *spi_data_size);
     /* Right shift address by 8 as the target memory space is a 24-bit address */
     *spi_addr = (cpu_to_be32(s->physical_addr)) >> 8;
@@ -98,14 +113,14 @@ static void esp32s3_xts_aes_encrypt(ESP32S3XtsAesState *s)
 {
     uint8_t efuse_key[XTS_AES_KEY_SIZE];
     uint8_t tweak[16];
-    uint32_t linesize = s->linesize == 0 ? 16 : 32;
+    uint32_t linesize = esp32s3_xts_aes_get_linesize(s);
 
     uint8_t input_plaintext[ESP32S3_XTS_AES_DATA_UNIT_SIZE];
     uint8_t input_plaintext_reversed[ESP32S3_XTS_AES_DATA_UNIT_SIZE];
     uint8_t output_ciphertext[ESP32S3_XTS_AES_DATA_UNIT_SIZE];
     uint8_t output_ciphertext_reversed[ESP32S3_XTS_AES_DATA_UNIT_SIZE];
 
-    *((uint32_t *) tweak) = cpu_to_le32(s->physical_addr & 0xFFFF80);
+    *((uint32_t *) tweak) = cpu_to_le32((s->physical_addr & ESP32S3_XTS_AES_TWEAK_VALUE) + (s->destination << 30));
     memset(tweak + 4, 0, 12);
 
     esp32s3_xts_aes_get_key(s, efuse_key);
@@ -162,7 +177,7 @@ static void esp32s3_xts_aes_decrypt(ESP32S3XtsAesState *s, uint32_t physical_add
     uint8_t output_plaintext_reversed[ESP32S3_XTS_AES_DATA_UNIT_SIZE];
 
     for (int i = 0; i < size; i += ESP32S3_XTS_AES_DATA_UNIT_SIZE) {
-        *((uint32_t *) tweak) = cpu_to_le32((physical_address + i) & 0xFFFF80);
+        *((uint32_t *) tweak) = cpu_to_le32(((physical_address + i) & ESP32S3_XTS_AES_TWEAK_VALUE) + (s->destination << 30));
         memset(tweak + 4, 0, 12);
 
         memcpy(input_ciphertext, data + i, ESP32S3_XTS_AES_DATA_UNIT_SIZE);
@@ -193,7 +208,7 @@ static uint64_t esp32s3_xts_aes_read(void *opaque, hwaddr addr, unsigned int siz
             r = 0x20200111;
             break;
 
-        case A_XTS_AES_PLAIN_0_REG ... A_XTS_AES_PLAIN_7_REG:
+        case A_XTS_AES_PLAIN_0_REG ... A_XTS_AES_PLAIN_15_REG:
             r = s->plaintext[(addr - A_XTS_AES_PLAIN_0_REG) / sizeof(uint32_t)];
             break;
 
@@ -250,7 +265,7 @@ static void esp32s3_xts_aes_write(void *opaque, hwaddr addr,
             }
             break;
 
-        case A_XTS_AES_PLAIN_0_REG ... A_XTS_AES_PLAIN_7_REG:
+        case A_XTS_AES_PLAIN_0_REG ... A_XTS_AES_PLAIN_15_REG:
             s->plaintext[(addr - A_XTS_AES_PLAIN_0_REG) / sizeof(uint32_t)] = value;
             break;
 

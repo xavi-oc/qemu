@@ -25,6 +25,7 @@
 #define EFUSE_KEY_PURPOSE_XTS_AES_128_KEY 4
 #define XTS_AES_KEY_SIZE 32
 #define ESP32C3_XTS_AES_DATA_UNIT_SIZE 128
+#define ESP32S3_XTS_AES_TWEAK_VALUE 0xFFFF80
 
 struct xts_aes_keys_ctx {
     AES_KEY enc;
@@ -109,7 +110,7 @@ static void esp32c3_xts_aes_encrypt(ESP32C3XtsAesState *s)
     uint8_t output_ciphertext[ESP32C3_XTS_AES_DATA_UNIT_SIZE];
     uint8_t output_ciphertext_reversed[ESP32C3_XTS_AES_DATA_UNIT_SIZE];
 
-    *((uint32_t *) tweak) = cpu_to_le32(s->physical_addr & 0xFFFF80);
+    *((uint32_t *) tweak) = cpu_to_le32(s->physical_addr & ESP32S3_XTS_AES_TWEAK_VALUE);
     memset(tweak + 4, 0, 12);
 
     esp32c3_xts_aes_get_key(s, efuse_key);
@@ -166,7 +167,7 @@ static void esp32c3_xts_aes_decrypt(ESP32C3XtsAesState *s, uint32_t physical_add
     uint8_t output_plaintext_reversed[ESP32C3_XTS_AES_DATA_UNIT_SIZE];
 
     for (int i = 0; i < size; i += ESP32C3_XTS_AES_DATA_UNIT_SIZE) {
-        *((uint32_t *) tweak) = cpu_to_le32((physical_address + i) & 0xFFFF80);
+        *((uint32_t *) tweak) = cpu_to_le32((physical_address + i) & ESP32S3_XTS_AES_TWEAK_VALUE);
         memset(tweak + 4, 0, 12);
 
         memcpy(input_ciphertext, data + i, ESP32C3_XTS_AES_DATA_UNIT_SIZE);
