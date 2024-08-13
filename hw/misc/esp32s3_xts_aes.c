@@ -18,10 +18,14 @@
 #define XTS_AES_WARNING 0
 #define XTS_AES_DEBUG   0
 
-#define EFUSE_KEY_PURPOSE_XTS_AES_128_KEY 4
-#define XTS_AES_KEY_SIZE 32
-#define ESP32S3_XTS_AES_DATA_UNIT_SIZE 128
-#define ESP32S3_XTS_AES_TWEAK_VALUE 0x3FFFFF80
+#define EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1     2
+#define EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_2     3
+#define EFUSE_KEY_PURPOSE_XTS_AES_128_KEY       4
+
+#define XTS_AES_KEY_SIZE_128                    32
+#define XTS_AES_KEY_SIZE_256                    64
+#define ESP32S3_XTS_AES_DATA_UNIT_SIZE          128
+#define ESP32S3_XTS_AES_TWEAK_VALUE             0x3FFFFF80
 
 struct xts_aes_keys_ctx {
     AES_KEY enc;
@@ -82,22 +86,53 @@ static uint32_t esp32s3_xts_aes_get_linesize(ESP32S3XtsAesState *s)
     }
 }
 
-static void esp32s3_xts_aes_get_key(ESP32S3XtsAesState *s, uint8_t *key)
+static uint32_t esp32s3_xts_aes_get_key_size(ESP32S3XtsAesState *s)
 {
     for (int i = EFUSE_BLOCK_KEY0; i < EFUSE_BLOCK_KEY6; i++) {
-        if (esp32c3_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_128_KEY) {
-            esp32c3_efuse_get_key(s->efuse, i, key);
-            // flash encryption key is stored in reverse byte order in the efuse block, correct it
-            uint8_t temp;
-            for (int j = 0; j < XTS_AES_KEY_SIZE / 2; j++) {
-                temp = key[j];
-                key[j] = key[XTS_AES_KEY_SIZE - j - 1];
-                key[XTS_AES_KEY_SIZE - j - 1] = temp;
-            }
-            return;
+        if (esp32c3_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1
+            || esp32c3_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_2) {
+            return XTS_AES_KEY_SIZE_256;
         }
     }
-    memset(key, 0, XTS_AES_KEY_SIZE);
+    // A key of 128 bits seem to be present
+    return XTS_AES_KEY_SIZE_128;
+}
+
+static void reverse_xts_aes_key(uint8_t *key)
+{
+    uint8_t temp;
+    for (int j = 0; j < XTS_AES_KEY_SIZE_128 / 2; j++) {
+        temp = key[j];
+        key[j] = key[XTS_AES_KEY_SIZE_128 - j - 1];
+        key[XTS_AES_KEY_SIZE_128 - j - 1] = temp;
+    }
+}
+
+static void esp32s3_xts_aes_get_key(ESP32S3XtsAesState *s, uint8_t *key, uint32_t key_size)
+{
+    memset(key, 0, key_size);
+
+    if (key_size == XTS_AES_KEY_SIZE_128) {
+        for (int i = EFUSE_BLOCK_KEY0; i < EFUSE_BLOCK_KEY6; i++) {
+            if (esp32c3_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_128_KEY) {
+                esp32c3_efuse_get_key(s->efuse, i, key);
+                // flash encryption key is stored in reverse byte order in the efuse block, correct it
+                reverse_xts_aes_key(key);
+                return;
+            }
+        }
+    } else {
+        // key_size == XTS_AES_KEY_SIZE_256
+        for (int i = EFUSE_BLOCK_KEY0; i < EFUSE_BLOCK_KEY6; i++) {
+            if (esp32c3_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1) {
+                esp32c3_efuse_get_key(s->efuse, i, key);
+                reverse_xts_aes_key(key);
+            } else if (esp32c3_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_2) {
+                esp32c3_efuse_get_key(s->efuse, i, key + XTS_AES_KEY_SIZE_128);
+                reverse_xts_aes_key(key + XTS_AES_KEY_SIZE_128);
+            }
+        }
+    }
 }
 
 static void esp32s3_xts_aes_read_ciphertext(ESP32S3XtsAesState *s, uint32_t* spi_data_regs, uint32_t* spi_data_size, uint32_t* spi_addr, uint32_t* spi_addr_size)
@@ -111,7 +146,6 @@ static void esp32s3_xts_aes_read_ciphertext(ESP32S3XtsAesState *s, uint32_t* spi
 
 static void esp32s3_xts_aes_encrypt(ESP32S3XtsAesState *s)
 {
-    uint8_t efuse_key[XTS_AES_KEY_SIZE];
     uint8_t tweak[16];
     uint32_t linesize = esp32s3_xts_aes_get_linesize(s);
 
@@ -123,15 +157,24 @@ static void esp32s3_xts_aes_encrypt(ESP32S3XtsAesState *s)
     *((uint32_t *) tweak) = cpu_to_le32((s->physical_addr & ESP32S3_XTS_AES_TWEAK_VALUE) + (s->destination << 30));
     memset(tweak + 4, 0, 12);
 
-    esp32s3_xts_aes_get_key(s, efuse_key);
+    uint32_t efuse_key_size = esp32s3_xts_aes_get_key_size(s);
+
+    uint8_t *efuse_key = g_malloc(efuse_key_size * sizeof(uint8_t));
+
+    if (efuse_key == NULL) {
+        error_report("[XTS-AES] Memory allocation for the efuse key failed");
+        return;
+    }
+
+    esp32s3_xts_aes_get_key(s, efuse_key, efuse_key_size);
 
     struct xts_aes_keys_ctx aesdata = {};
     struct xts_aes_keys_ctx aestweak = {};
 
-    AES_set_encrypt_key(efuse_key, XTS_AES_KEY_SIZE / 2 * 8, &aesdata.enc);
-    AES_set_decrypt_key(efuse_key, XTS_AES_KEY_SIZE / 2 * 8, &aesdata.dec);
-    AES_set_encrypt_key(efuse_key + XTS_AES_KEY_SIZE / 2, XTS_AES_KEY_SIZE / 2 * 8, &aestweak.enc);
-    AES_set_decrypt_key(efuse_key + XTS_AES_KEY_SIZE / 2, XTS_AES_KEY_SIZE / 2 * 8, &aestweak.dec);
+    AES_set_encrypt_key(efuse_key, efuse_key_size / 2 * 8, &aesdata.enc);
+    AES_set_decrypt_key(efuse_key, efuse_key_size / 2 * 8, &aesdata.dec);
+    AES_set_encrypt_key(efuse_key + efuse_key_size / 2, efuse_key_size / 2 * 8, &aestweak.enc);
+    AES_set_decrypt_key(efuse_key + efuse_key_size / 2, efuse_key_size / 2 * 8, &aestweak.dec);
 
     memset(input_plaintext, 0, ESP32S3_XTS_AES_DATA_UNIT_SIZE);
 
@@ -154,22 +197,30 @@ static void esp32s3_xts_aes_encrypt(ESP32S3XtsAesState *s)
 
     memset(s->ciphertext, 0, ESP32S3_XTS_AES_PLAIN_REG_CNT * sizeof(uint32_t));
     memcpy(s->ciphertext, output_ciphertext + pad_left, linesize);
+    g_free(efuse_key);
 }
 
 static void esp32s3_xts_aes_decrypt(ESP32S3XtsAesState *s, uint32_t physical_address, uint8_t *data, uint32_t size)
 {
+    uint8_t tweak[16];
     struct xts_aes_keys_ctx aesdata = {};
     struct xts_aes_keys_ctx aestweak = {};
 
-    uint8_t efuse_key[XTS_AES_KEY_SIZE];
-    uint8_t tweak[16];
+    uint32_t efuse_key_size = esp32s3_xts_aes_get_key_size(s);
 
-    esp32s3_xts_aes_get_key(s, efuse_key);
+    uint8_t *efuse_key = g_malloc(efuse_key_size * sizeof(uint8_t));
 
-    AES_set_encrypt_key(efuse_key, XTS_AES_KEY_SIZE / 2 * 8, &aesdata.enc);
-    AES_set_decrypt_key(efuse_key, XTS_AES_KEY_SIZE / 2 * 8, &aesdata.dec);
-    AES_set_encrypt_key(efuse_key + XTS_AES_KEY_SIZE / 2, XTS_AES_KEY_SIZE / 2 * 8, &aestweak.enc);
-    AES_set_decrypt_key(efuse_key + XTS_AES_KEY_SIZE / 2, XTS_AES_KEY_SIZE / 2 * 8, &aestweak.dec);
+    if (efuse_key == NULL) {
+        error_report("[XTS-AES] Memory allocation for the efuse key failed");
+        return;
+    }
+
+    esp32s3_xts_aes_get_key(s, efuse_key, efuse_key_size);
+
+    AES_set_encrypt_key(efuse_key, efuse_key_size / 2 * 8, &aesdata.enc);
+    AES_set_decrypt_key(efuse_key, efuse_key_size / 2 * 8, &aesdata.dec);
+    AES_set_encrypt_key(efuse_key + efuse_key_size / 2, efuse_key_size / 2 * 8, &aestweak.enc);
+    AES_set_decrypt_key(efuse_key + efuse_key_size / 2, efuse_key_size / 2 * 8, &aestweak.dec);
 
     uint8_t input_ciphertext[ESP32S3_XTS_AES_DATA_UNIT_SIZE];
     uint8_t input_ciphertext_reversed[ESP32S3_XTS_AES_DATA_UNIT_SIZE];
@@ -196,6 +247,7 @@ static void esp32s3_xts_aes_decrypt(ESP32S3XtsAesState *s, uint32_t physical_add
 
         memcpy(data + i, output_plaintext, ESP32S3_XTS_AES_DATA_UNIT_SIZE);
     }
+    g_free(efuse_key);
 }
 
 static uint64_t esp32s3_xts_aes_read(void *opaque, hwaddr addr, unsigned int size)
