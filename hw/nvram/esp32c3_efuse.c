@@ -462,9 +462,17 @@ static void esp32c3_efuse_realize(DeviceState *dev, Error **errp)
         /* Set the chip revision to v0.3 and write it to the file */
         s->efuses.rd_mac_spi_sys_3.wafer_version_minor_low = 3;
 
-        /* No need to rewrite the all the efuses, rd_mac_spi_sys_3 is enough */
-        const uint32_t offset = offsetof(ESP32C3EfuseRegs, rd_mac_spi_sys_3) - esp32c3_offset_of_block(0);
-        *((uint32_t*) (s->mirror + offset)) = s->efuses.rd_mac_spi_sys_3.val;
+        /* Set the chip eFuse block revision 1.3 */
+        s->efuses.rd_sys_part1_data4.blk_version_major = 1;
+        s->efuses.rd_mac_spi_sys_3.blk_version_minor = 3;
+
+        /* No need to rewrite the all the efuses, write rd_mac_spi_sys_3... */
+        uint32_t* word_mirror = (uint32_t*) s->mirror;
+        uint32_t idx = (offsetof(ESP32C3EfuseRegs, rd_mac_spi_sys_3) - esp32c3_offset_of_block(0)) / sizeof(uint32_t);
+        word_mirror[idx] = s->efuses.rd_mac_spi_sys_3.val;
+        /* and rd_sys_part1_data4 value to the mirror in RAM */
+        idx = (offsetof(ESP32C3EfuseRegs, rd_sys_part1_data4) - esp32c3_offset_of_block(0)) / sizeof(uint32_t);
+        word_mirror[idx] = s->efuses.rd_sys_part1_data4.val;
 
     } else {
         /* A block was given as a parameter, open it in READ/WRITE */
