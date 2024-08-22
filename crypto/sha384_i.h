@@ -12,6 +12,11 @@
 #include "qemu/osdep.h"
 #include "sha512_i.h"
 
+/**
+ * @brief Size of SHA384 hash in bytes
+ */
+#define SHA384_HASH_SIZE 48
+
 #define sha384_state sha512_state
 
 void sha384_init(struct sha384_state *md);

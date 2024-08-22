@@ -38,30 +38,84 @@ static ESP32S3HashAlg esp32s3_algs[] = {
         .compress = (hash_compress) sha256_compress,
         .len      = sizeof(struct sha256_state)
     },
+    [ESP32S3_SHA_384_MODE]  = {
+        .init     = (hash_init) sha384_init,
+        .compress = (hash_compress) sha512_compress,
+        .len      = SHA384_HASH_SIZE
+    },
+    [ESP32S3_SHA_512_MODE]  = {
+        .init     = (hash_init) sha512_init,
+        .compress = (hash_compress) sha512_compress,
+        .len      = sizeof(struct sha512_state)
+    },
+    [ESP32S3_SHA_512_224_MODE]  = {
+        .init     = (hash_init) sha512_224_init,
+        .compress = (hash_compress) sha512_compress,
+        .len      = sizeof(struct sha512_state)
+    },
+    [ESP32S3_SHA_512_256_MODE]  = {
+        .init     = (hash_init) sha512_256_init,
+        .compress = (hash_compress) sha512_compress,
+        .len      = sizeof(struct sha512_state)
+    },
+    [ESP32S3_SHA_512_t_MODE]  = {
+        .init         = (hash_init) sha512_t_init,
+        .init_message = (hash_init_message) sha512_t_init_message,
+        .compress     = (hash_compress) sha512_compress,
+        .len          = sizeof(struct sha512_state)
+    },
 };
+
+
+static void esp32s3_sha_write_digest(ESP32S3ShaMode mode, uint32_t* hash, ESP32S3HashContext* context, size_t len)
+{
+    if (mode < ESP32S3_SHA_384_MODE) {
+        memcpy(context, hash, len);
+    } else {
+        for (int i = 0; i < 8; i++) {
+            context->sha512.state[i] = ((uint64_t)hash[i * 2] << 32) | hash[1 + (i * 2)];
+        }
+    }
+}
+
+
+static void esp32s3_sha_read_digest(ESP32S3ShaMode mode, uint32_t* hash, ESP32S3HashContext* context, size_t len)
+{
+    if (mode < ESP32S3_SHA_384_MODE) {
+        memcpy(hash, context, len);
+    } else {
+        for (int i = 0; i < 8; i++) {
+            hash[i * 2] = (uint32_t)(context->sha512.state[i] >> 32);
+            hash[1 + (i * 2)] = (uint32_t)(context->sha512.state[i] & 0xffffffff);
+        }
+    }
+}
 
 
 static void esp32s3_sha_continue_hash(ESP32S3ShaState *s, uint32_t mode, uint32_t *message, uint32_t *hash)
 {
-    assert(mode <= ESP32S3_SHA_256_MODE);
+    assert(mode <= ESP32S3_SHA_512_t_MODE);
     ESP32S3HashAlg alg = esp32s3_algs[mode];
 
     alg.compress(&s->context, (uint8_t*) message);
-    memcpy(hash, &s->context, alg.len);
+
+    esp32s3_sha_read_digest(s->mode, s->hash, &s->context, alg.len);
 }
 
 
 static void esp32s3_sha_continue_dma(ESP32S3ShaState *s)
 {
-    assert(s->mode <= ESP32S3_SHA_256_MODE);
+    assert(s->mode <= ESP32S3_SHA_512_t_MODE);
     ESP32S3HashAlg alg = esp32s3_algs[s->mode];
     uint32_t gdma_out_idx = 0;
 
     assert(alg.compress);
 
-    /* Number of blocks to process, each block is ESP32S3_MESSAGE_SIZE bytes big */
+    size_t blk_len = (s->mode < ESP32S3_SHA_384_MODE) ? 64 : 128;
+
+    /* Number of blocks to process, each block is blk_len bytes big */
     const uint32_t blocks = s->block;
-    const uint32_t buf_size = blocks * ESP32S3_MESSAGE_SIZE;
+    const uint32_t buf_size = blocks * blk_len;
 
     /* Get the GDMA channel connected to SHA module.
      * Specify ESP32S3_GDMA_OUT_IDX since the data are going OUT of GDMA but IN our current component. */
@@ -72,7 +126,7 @@ static void esp32s3_sha_continue_dma(ESP32S3ShaState *s)
     }
 
     /* Allocate the buffer that will contain the data and get teh actual data */
-    uint8_t *buffer = g_malloc(blocks * ESP32S3_MESSAGE_SIZE);
+    uint8_t *buffer = g_malloc(blocks * blk_len);
     if (buffer == NULL)
     {
         error_report("[SHA] No more memory in host!");
@@ -81,15 +135,16 @@ static void esp32s3_sha_continue_dma(ESP32S3ShaState *s)
     if ( !esp32s3_gdma_read_channel(s->gdma, gdma_out_idx, buffer, buf_size) ) {
         warn_report("[SHA] Error reading from GDMA buffer");
         g_free(buffer);
+        return;
     }
 
     /* Perform the actual SHA operation on the whole buffer */
     for (uint32_t i = 0; i < blocks; i++)
     {
-        alg.compress(&s->context, buffer + i * ESP32S3_MESSAGE_SIZE);
+        alg.compress(&s->context, buffer + i * blk_len);
     }
 
-    memcpy(s->hash, &s->context, alg.len);
+    esp32s3_sha_read_digest(s->mode, s->hash, &s->context, alg.len);
 
     g_free(buffer);
 
@@ -107,10 +162,13 @@ static void esp32s3_sha_start(ESP32S3ShaState *s, ESP32S3ShaOperation op, uint32
 
     if ((op & SHA_OP_TYPE_MASK) == OP_START) {
         alg.init(&s->context);
+        if (s->mode == ESP32S3_SHA_512_t_MODE) {
+            alg.init_message(message, ESP32S3_MESSAGE_WORDS, s->t, s->t_len);
+        }
     } else {
         /* Continue operation: initialize the context from the current hash.
          * We don't have any accessor to do it so ... do it the "dirty" way */
-        memcpy(&s->context, hash, alg.len);
+        esp32s3_sha_write_digest(s->mode, s->hash, &s->context, alg.len);
     }
 
     if ((op & SHA_OP_DMA_MASK) == SHA_OP_DMA_MASK) {
@@ -181,9 +239,17 @@ static void esp32s3_sha_write(void *opaque, hwaddr addr,
 
     switch (addr) {
     case A_SHA_MODE:
-        /* Make sure the value is always between 0 and 2 as the real hardware doesn't
-         * accept a value of 3. Choose SHA-1 by default in that case. */
-        s->mode = (value & 0b11) % 3;
+        /* Make sure the value is always between 0 and 7 as the real hardware doesn't
+         * accept a value of 8. Choose SHA-1 by default in that case. */
+        s->mode = (value & 0b111) % 8;
+        break;
+
+    case A_SHA_T_STRING:
+        s->t = bswap32((uint32_t) value);
+        break;
+
+    case A_SHA_T_LENGTH:
+        s->t_len = bswap32(FIELD_EX32(value, SHA_T_LENGTH, T_LENGTH));
         break;
 
     case A_SHA_START:

@@ -3,6 +3,11 @@
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "hw/registerfields.h"
+#include "crypto/sha512_t_i.h"
+#include "crypto/sha512_256_i.h"
+#include "crypto/sha512_224_i.h"
+#include "crypto/sha512_i.h"
+#include "crypto/sha384_i.h"
 #include "crypto/sha256_i.h"
 #include "crypto/sha224_i.h"
 #include "crypto/sha1_i.h"
@@ -49,16 +54,19 @@ typedef enum {
 } ESP32S3ShaOperation;
 
 typedef union {
+    struct sha512_state sha512;
     struct sha256_state sha256;
     struct sha1_state   sha1;
 } ESP32S3HashContext;
 
 
 typedef void (*hash_init)(void *);
+typedef void (*hash_init_message)(uint32_t *, size_t, uint32_t, uint32_t);
 typedef void (*hash_compress)(void *, const uint8_t*);
 
 typedef struct {
     hash_init init;
+    hash_init_message init_message;
     /* For all types of hash, the message to "compress" must be 64-byte long (16 words of 32 bits) */
     hash_compress compress;
     /* Length of the context in bytes */
@@ -79,6 +87,9 @@ typedef struct ESP32S3ShaState {
     uint32_t hash[16];
     /* User data value */
     uint32_t message[ESP32S3_MESSAGE_WORDS];
+
+    uint32_t t;
+    uint32_t t_len;
 
     /* DMA related */
     /* Number of block to process in DMA mode */
@@ -103,6 +114,7 @@ REG32(SHA_MODE, 0x000)
 REG32(SHA_T_STRING, 0x004)
 
 REG32(SHA_T_LENGTH, 0x008)
+    FIELD(SHA_T_LENGTH, T_LENGTH, 0, 7)
 
 REG32(SHA_DMA_BLOCK_NUM, 0x00C)
     FIELD(SHA_DMA_BLOCK_NUM, DMA_BLOCK_NUM, 0, 6)
