@@ -262,6 +262,65 @@ static void esp32c3_init_openeth(Esp32C3MachineState *ms)
 }
 
 
+static void esp32c3_load_firmware(MachineState *machine)
+{
+    Esp32C3MachineState *ms = ESP32C3_MACHINE(machine);
+    const char *bios_filename = NULL;
+
+    if (machine->firmware) {
+        bios_filename = machine->firmware;
+    }
+
+    if (machine->kernel_filename) {
+        if (bios_filename) {
+            qemu_log("Warning: both -bios and -kernel arguments specified. Only loading the the -kernel file.\n");
+        }
+        bios_filename = machine->kernel_filename;
+    }
+
+    if (bios_filename) {
+        /* Since EspRISCVCPU doens't have a RISCVHartArrayState field, let's bake one on the stack. It will only be
+         * used to get the type of the RISC-V CPU (32 or 64 bits) in `riscv_load_kernel` */
+        RISCVHartArrayState hart = {
+            .harts = &ms->soc.parent_obj,
+            .num_harts = 1,
+        };
+
+        /* The function `riscv_load_kernel` won't load the ELF file at its entry point, so we have to look
+         * for the ELF entry point manually here */
+        uint64_t elf_entry = ESP32C3_RESET_ADDRESS;
+
+        /* The entry point address should be populated regardless of the return value */
+        load_elf_ram_sym(bios_filename, NULL, NULL, NULL,
+                        &elf_entry, NULL, NULL, NULL, 0,
+                        EM_RISCV, 1, 0, NULL, false, NULL);
+
+        /* On failure, riscv_load_kernel exits the program */
+        printf("Loading kernel at address 0x%lx\n", elf_entry);
+        riscv_load_kernel(machine, &hart, elf_entry, false, NULL);
+        if (elf_entry != ESP32C3_RESET_ADDRESS) {
+            qdev_prop_set_uint64(DEVICE(&ms->soc), "resetvec", elf_entry);
+        }
+    } else {
+        /* Open and load the "bios", which is the ROM binary, also named "first stage bootloader" */
+        char *rom_binary = qemu_find_file(QEMU_FILE_TYPE_BIOS, "esp32c3-rom.bin");
+        if (rom_binary == NULL) {
+            error_report("Error: -bios argument not set, and ROM code binary not found (1)");
+            exit(1);
+        }
+
+        /* Load ROM file at the reset address */
+        int size = load_image_targphys_as(rom_binary, ESP32C3_RESET_ADDRESS, 0x60000, CPU(&ms->soc)->as);
+        if (size < 0) {
+            error_report("Error: could not load ROM binary '%s'", rom_binary);
+            exit(1);
+        }
+
+        g_free(rom_binary);
+    }
+}
+
+
 static void esp32c3_machine_init(MachineState *machine)
 {
     /* First thing to do is to check if a drive format and a file ahve been passed through the command line.
@@ -315,6 +374,8 @@ static void esp32c3_machine_init(MachineState *machine)
     MemoryRegion *rtcram = g_new(MemoryRegion, 1);
     memory_region_init_ram(rtcram, NULL, "esp32c3.rtcram", memmap[ESP32C3_MEMREGION_RTCFAST].size, &error_fatal);
     memory_region_add_subregion(sys_mem, memmap[ESP32C3_MEMREGION_RTCFAST].base, rtcram);
+
+    esp32c3_load_firmware(machine);
 
     qdev_realize(DEVICE(&ms->soc), NULL, &error_fatal);
 
@@ -582,48 +643,6 @@ static void esp32c3_machine_init(MachineState *machine)
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->rgb), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_FRAMEBUF_BASE, mr, 0);
         memory_region_add_subregion_overlap(sys_mem, esp32c3_memmap[ESP32C3_MEMREGION_FRAMEBUF].base, &ms->rgb.vram, 0);
-    }
-
-
-    const char *bios_filename = NULL;
-
-    if (machine->firmware) {
-        bios_filename = machine->firmware;
-    }
-
-    if (machine->kernel_filename) {
-        if (bios_filename) {
-            qemu_log("Warning: both -bios and -kernel arguments specified. Only loading the the -kernel file.\n");
-        }
-        bios_filename = machine->kernel_filename;
-    }
-
-    if (bios_filename) {
-        /* Since EspRISCVCPU doens't have a RISCVHartArrayState field, let's bake one on the stack. It will only be
-         * used to get the type of the RISC-V CPU (32 or 64 bits) in `riscv_load_kernel` */
-        RISCVHartArrayState hart = {
-            .harts = &ms->soc.parent_obj,
-            .num_harts = 1,
-        };
-
-        /* On failure, riscv_load_kernel exits the program */
-        riscv_load_kernel(machine, &hart, ESP32C3_RESET_ADDRESS, false, NULL);
-    } else {
-        /* Open and load the "bios", which is the ROM binary, also named "first stage bootloader" */
-        char *rom_binary = qemu_find_file(QEMU_FILE_TYPE_BIOS, "esp32c3-rom.bin");
-        if (rom_binary == NULL) {
-            error_report("Error: -bios argument not set, and ROM code binary not found (1)");
-            exit(1);
-        }
-
-        /* Load ROM file at the reset address */
-        int size = load_image_targphys_as(rom_binary, ESP32C3_RESET_ADDRESS, 0x60000, CPU(&ms->soc)->as);
-        if (size < 0) {
-            error_report("Error: could not load ROM binary '%s'", rom_binary);
-            exit(1);
-        }
-
-        g_free(rom_binary);
     }
 }
 
