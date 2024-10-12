@@ -65,6 +65,7 @@
 #include "cpu_esp32s3.h"
 
 #include "hw/misc/esp32c3_jtag.h"
+#include "hw/display/esp_rgb.h"
 
 #define TYPE_ESP32S3_SOC "xtensa.esp32s3"
 #define ESP32S3_SOC(obj) OBJECT_CHECK(Esp32s3SocState, (obj), TYPE_ESP32S3_SOC)
@@ -81,6 +82,7 @@ enum {
     ESP32S3_MEMREGION_DCACHE,
     ESP32S3_MEMREGION_RTCSLOW,
     ESP32S3_MEMREGION_RTCFAST,
+    ESP32S3_MEMREGION_FRAMEBUF,
 };
 
 static const struct MemmapEntry {
@@ -95,6 +97,8 @@ static const struct MemmapEntry {
     [ESP32S3_MEMREGION_ICACHE] = { 0x42000000, 0x20000000 },
     [ESP32S3_MEMREGION_RTCSLOW] = { 0x50000000, 0x2000 },
     [ESP32S3_MEMREGION_RTCFAST] = { 0x600fe000, 0x2000 },
+    /* Virtual Framebuffer, used for the graphical interface */
+    [ESP32S3_MEMREGION_FRAMEBUF] = { 0x20000000, ESP_RGB_MAX_VRAM_SIZE },
 };
 
 
@@ -118,10 +122,10 @@ typedef struct Esp32s3SocState {
     ESP32S3GPIOState gpio;
     Esp32s3RngState rng;
 
-    Esp32s3RtcCntlState rtc_cntl; 
-    
-    BusState rtc_bus; 
-    BusState periph_bus; 
+    Esp32s3RtcCntlState rtc_cntl;
+
+    BusState rtc_bus;
+    BusState periph_bus;
 
     MemoryRegion cpu_specific_mem[ESP32S3_CPU_COUNT];
     ESP32S3SpiState spi1;
@@ -140,6 +144,7 @@ typedef struct Esp32s3SocState {
     ESP32S3SysTimerState systimer;
 
     ESP32C3UsbJtagState jtag;
+    ESPRgbState rgb;
 
     MemoryRegion iomem;
     DeviceState *eth;
@@ -147,12 +152,14 @@ typedef struct Esp32s3SocState {
     uint32_t requested_reset;
 } Esp32s3SocState;
 
-#define A_SYSCON_ORIGIN_REG     0x3F8
-#define A_SYSCON_RND_DATA_REG   0x0B0
 
 /* Temporary macro to mark the CPU as in non-debugging mode */
 #define A_ASSIST_DEBUG_CORE_0_DEBUG_MODE_REG    0x098
 
+/* "QEMU" as a 32-bit value, can be used by the application to to check whether it is running in
+ * QEMU or on real hardware */
+#define RGB_QEMU_ORIGIN     0x51454d55
+#define RGB_QEMU_ORIGIN_REG 0x3F8
 
 static void remove_cpu_watchpoints(XtensaCPU* xcs)
 {
@@ -400,46 +407,27 @@ static void esp32s3_soc_realize(DeviceState *dev, Error **errp)
      * This is a small hack to avoid creating a whole new device just to emulate one
      * register.
      */
-    const hwaddr apb_ctrl_date_reg = DR_REG_APB_CTRL_BASE + 0x7c;
+    const hwaddr apb_ctrl_regs = DR_REG_APB_CTRL_BASE;
     MemoryRegion *apbctrl_mem = g_new(MemoryRegion, 1);
-    memory_region_init_ram(apbctrl_mem, NULL, "esp32.apbctrl_date_reg", 4 /* bytes */, &error_fatal);
-    memory_region_add_subregion(sys_mem, apb_ctrl_date_reg, apbctrl_mem);
+    memory_region_init_ram(apbctrl_mem, NULL, "esp32s3.apbctrl", 0x400 /* bytes */, &error_fatal);
+    memory_region_add_subregion(sys_mem, apb_ctrl_regs, apbctrl_mem);
     uint32_t apb_ctrl_date_reg_val = 0x16042000 | 0x80000000;  /* MSB indicates ECO3 silicon revision */
-    cpu_physical_memory_write(apb_ctrl_date_reg, &apb_ctrl_date_reg_val, 4);
+    uint32_t qemu_sig = RGB_QEMU_ORIGIN;
+    cpu_physical_memory_write(apb_ctrl_regs + 0x7c, &apb_ctrl_date_reg_val, 4);
+    cpu_physical_memory_write(apb_ctrl_regs + RGB_QEMU_ORIGIN_REG, &qemu_sig, 4);
 
     qemu_register_reset((QEMUResetHandler*) esp32s3_soc_reset, dev);
-}
-
-static bool addr_in_range(hwaddr addr, hwaddr start, hwaddr end)
-{
-    return addr >= start && addr < end;
 }
 
 
 static uint64_t esp32s3_io_read(void *opaque, hwaddr addr, unsigned int size)
 {
-    if (addr_in_range(addr + ESP32S3_IO_START_ADDR, DR_REG_RTC_I2C_BASE, DR_REG_RTC_I2C_BASE + 0x100)) {
-        return (uint32_t) 0xffffff;
-    } else if (addr + ESP32S3_IO_START_ADDR == DR_REG_SYSCON_BASE + A_SYSCON_ORIGIN_REG) {
-        /* Return "QEMU" as a 32-bit value */
-        return 0x51454d55;
-    } else if (addr + ESP32S3_IO_START_ADDR == DR_REG_SYSCON_BASE + A_SYSCON_RND_DATA_REG) {
-        /* Return a random 32-bit value */
-        static bool init = false;
-        if (!init) {
-            srand(time(NULL));
-            init = true;
-        }
-        return rand();
-    } else if (addr + ESP32S3_IO_START_ADDR == DR_REG_ASSIST_DEBUG_BASE + A_ASSIST_DEBUG_CORE_0_DEBUG_MODE_REG) {
-        return 0;
-    } else {
 #if ESP32S3_IO_WARNING
-        warn_report("[ESP32-S3] Unsupported read to $%08lx, size = %i\n", ESP32S3_IO_START_ADDR + addr, size);
+    warn_report("[ESP32-S3] Unsupported read to $%08lx, size = %i\n", ESP32S3_IO_START_ADDR + addr, size);
 #endif
-    }
     return 0;
 }
+
 
 static void esp32s3_io_write(void *opaque, hwaddr addr, uint64_t value, unsigned int size)
 {
@@ -473,7 +461,7 @@ static void esp32s3_soc_init(Object *obj)
 
     for (int i = 0; i < ms->smp.cpus; ++i) {
         snprintf(name, sizeof(name), "cpu%d", i);
-            
+
         object_initialize_child(obj, name, &s->cpu[i], TYPE_ESP32S3_CPU);
         // Allocate memory for TIE registers
         s->cpu[i].env.ext = qemu_memalign(16, sizeof(CPUXtensaEsp32s3State));
@@ -625,6 +613,7 @@ static void esp32s3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(ss), "timg0", &ss->timg[0], TYPE_ESP32C3_TIMG);
     object_initialize_child(OBJECT(ss), "timg1", &ss->timg[1], TYPE_ESP32C3_TIMG);
     object_initialize_child(OBJECT(ss), "systimer", &ss->systimer, TYPE_ESP32S3_SYSTIMER);
+    object_initialize_child(OBJECT(ss), "rgb", &ss->rgb, TYPE_ESP_RGB);
 
     DeviceState* intmatrix_dev = DEVICE(&ss->intmatrix);
     {
@@ -805,9 +794,19 @@ static void esp32s3_machine_init(MachineState *machine)
         memory_region_add_subregion_overlap(sys_mem, DR_REG_AES_XTS_BASE, mr, 0);
     }
 
+    /* RGB display realization */
+    {
+        /* Give the internal RAM memory region to the display */
+        ss->rgb.intram = dram;
+        sysbus_realize(SYS_BUS_DEVICE(&ss->rgb), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->rgb), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_FRAMEBUF_BASE, mr, 0);
+        memory_region_add_subregion_overlap(sys_mem, esp32s3_memmap[ESP32S3_MEMREGION_FRAMEBUF].base, &ss->rgb.vram, 0);
+    }
+
     esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.rmt", DR_REG_RMT_BASE, 0x1000);
     esp32s3_soc_add_unimp_device(sys_mem, "esp32s3.iomux", DR_REG_IO_MUX_BASE, 0x2000);
-    
+
     /* Need MMU initialized prior to ELF loading,
      * so that ELF gets loaded into virtual addresses
      */

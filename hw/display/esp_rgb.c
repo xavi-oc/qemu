@@ -90,7 +90,7 @@ static uint64_t esp_rgb_read(void *opaque, hwaddr addr, unsigned int size)
         case A_RGB_UPDATE_STATUS:
             r = s->update_area;
             break;
-        
+
         case A_RGB_BPP_VALUE:
             r = s->bpp;
             break;
@@ -214,7 +214,7 @@ static void rgb_update(void* opaque)
         /* Only perform the copy if the area is valid */
         if (width > 0 && height > 0 &&
             (s->from_x + width) <= s->width && (s->from_y + height) <= s->height) {
-            
+
             uint8_t* dest = data + (s->from_y * s->width + s->from_x) * bytes_per_pixel;
 
             /* Copy the pixels to the framebuffer */
@@ -266,7 +266,7 @@ static void esp_rgb_realize(DeviceState *dev, Error **errp)
 
     assert(s->intram != NULL);
     /* Create an address space for internal RAM so that we can read data from it on GUI update */
-    address_space_init(&s->intram_as, s->intram, "esp32c3.rgb.intram_as");
+    address_space_init(&s->intram_as, s->intram, "esp.rgb.intram_as");
 }
 
 
@@ -302,10 +302,10 @@ static void esp_rgb_init(Object *obj)
     }
 
     /* Create a memory region that can be used as a framebuffer by the guest */
-    memory_region_init_ram(&s->vram, OBJECT(s), "esp32c3-rgb-vram", ESP_RGB_MAX_VRAM_SIZE, &error_abort);
+    memory_region_init_ram(&s->vram, OBJECT(s), "esp-rgb-vram", ESP_RGB_MAX_VRAM_SIZE, &error_abort);
 
     /* Create an AddressSpace out of the MemoryRegion to be able to perform DMA */
-    address_space_init(&s->vram_as, &s->vram, "esp32c3.rgb.vram_as");
+    address_space_init(&s->vram_as, &s->vram, "esp.rgb.vram_as");
 }
 
 
