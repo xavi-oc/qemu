@@ -41,7 +41,7 @@ typedef struct ESP32C3HmacState {
     uint32_t efuse_key_purpose;
     uint32_t message_write_complete;
     uint32_t result[ESP32C3_HMAC_RD_RESULT_REG_CNT];
-    ESP32C3EfuseState *efuse;
+    ESPEfuseState *efuse;
 } ESP32C3HmacState;
 
 typedef struct ESP32C3HmacClass {

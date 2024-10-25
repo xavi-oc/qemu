@@ -47,7 +47,7 @@ typedef struct ESP32S3XtsAesState {
     uint32_t state;
 
     ESP32S3ClockState *clock;
-    ESP32C3EfuseState *efuse;
+    ESPEfuseState *efuse;
 } ESP32S3XtsAesState;
 
 typedef struct ESP32S3XtsAesClass {

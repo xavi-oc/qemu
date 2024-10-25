@@ -130,7 +130,7 @@ typedef struct Esp32s3SocState {
     MemoryRegion cpu_specific_mem[ESP32S3_CPU_COUNT];
     ESP32S3SpiState spi1;
     ESP32S3CacheState cache;
-    ESP32C3EfuseState efuse;
+    ESPEfuseState efuse;
     ESP32S3ClockState clock;
     ESP32S3GdmaState gdma;
     ESP32S3ShaState sha;
@@ -595,7 +595,7 @@ static void esp32s3_machine_init(MachineState *machine)
 
     object_initialize_child(OBJECT(ss), "extmem", &ss->cache, TYPE_ESP32S3_CACHE);
     object_initialize_child(OBJECT(ss), "spi1", &ss->spi1, TYPE_ESP32S3_SPI);
-    object_initialize_child(OBJECT(ss), "efuse", &ss->efuse, TYPE_ESP32C3_EFUSE);
+    object_initialize_child(OBJECT(ss), "efuse", &ss->efuse, TYPE_ESP_EFUSE);
     object_initialize_child(OBJECT(ss), "jtag", &ss->jtag, TYPE_ESP32C3_JTAG);
     object_initialize_child(OBJECT(ss), "gpio", &ss->gpio, TYPE_ESP32S3_GPIO);
     object_initialize_child(OBJECT(ss), "rng", &ss->rng, TYPE_ESP32S3_RNG);

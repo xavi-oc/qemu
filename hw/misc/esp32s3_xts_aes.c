@@ -60,14 +60,14 @@ static bool esp32s3_xts_aes_is_ciphertext_spi_visible(ESP32S3XtsAesState *s)
 static bool esp32s3_xts_aes_is_manual_enc_enabled(ESP32S3XtsAesState *s)
 {
     ESP32S3ClockClass *clock_class = ESP32S3_CLOCK_GET_CLASS(s->clock);
-    ESP32C3EfuseClass *efuse_class = ESP32C3_EFUSE_GET_CLASS(s->efuse);
+    ESPEfuseClass *efuse_class = ESP_EFUSE_GET_CLASS(s->efuse);
     uint32_t ext_dev_enc_dec_ctrl_reg = clock_class->get_ext_dev_enc_dec_ctrl(s->clock);
-    return ((ext_dev_enc_dec_ctrl_reg & 1) || ((ext_dev_enc_dec_ctrl_reg & 8) && (efuse_class->get_dis_downlaod_man_encrypt == 0)));
+    return ((ext_dev_enc_dec_ctrl_reg & 1) || ((ext_dev_enc_dec_ctrl_reg & 8) && (efuse_class->get_dis_download_man_encrypt == 0)));
 }
 
 static bool esp32s3_xts_aes_is_flash_enc_enabled(ESP32S3XtsAesState *s)
 {
-    ESP32C3EfuseClass *efuse_class = ESP32C3_EFUSE_GET_CLASS(s->efuse);
+    ESPEfuseClass *efuse_class = ESP_EFUSE_GET_CLASS(s->efuse);
     uint32_t spi_boot_crypt_cnt = efuse_class->get_spi_boot_crypt_cnt(s->efuse);
     return (ctpop32(spi_boot_crypt_cnt) & 1);
 }
@@ -89,8 +89,8 @@ static uint32_t esp32s3_xts_aes_get_linesize(ESP32S3XtsAesState *s)
 static uint32_t esp32s3_xts_aes_get_key_size(ESP32S3XtsAesState *s)
 {
     for (int i = EFUSE_BLOCK_KEY0; i < EFUSE_BLOCK_KEY6; i++) {
-        if (esp32c3_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1
-            || esp32c3_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_2) {
+        if (esp_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1
+            || esp_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_2) {
             return XTS_AES_KEY_SIZE_256;
         }
     }
@@ -114,8 +114,8 @@ static void esp32s3_xts_aes_get_key(ESP32S3XtsAesState *s, uint8_t *key, uint32_
 
     if (key_size == XTS_AES_KEY_SIZE_128) {
         for (int i = EFUSE_BLOCK_KEY0; i < EFUSE_BLOCK_KEY6; i++) {
-            if (esp32c3_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_128_KEY) {
-                esp32c3_efuse_get_key(s->efuse, i, key);
+            if (esp_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_128_KEY) {
+                esp_efuse_get_key(s->efuse, i, key);
                 // flash encryption key is stored in reverse byte order in the efuse block, correct it
                 reverse_xts_aes_key(key);
                 return;
@@ -124,11 +124,11 @@ static void esp32s3_xts_aes_get_key(ESP32S3XtsAesState *s, uint8_t *key, uint32_
     } else {
         // key_size == XTS_AES_KEY_SIZE_256
         for (int i = EFUSE_BLOCK_KEY0; i < EFUSE_BLOCK_KEY6; i++) {
-            if (esp32c3_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1) {
-                esp32c3_efuse_get_key(s->efuse, i, key);
+            if (esp_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1) {
+                esp_efuse_get_key(s->efuse, i, key);
                 reverse_xts_aes_key(key);
-            } else if (esp32c3_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_2) {
-                esp32c3_efuse_get_key(s->efuse, i, key + XTS_AES_KEY_SIZE_128);
+            } else if (esp_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_2) {
+                esp_efuse_get_key(s->efuse, i, key + XTS_AES_KEY_SIZE_128);
                 reverse_xts_aes_key(key + XTS_AES_KEY_SIZE_128);
             }
         }

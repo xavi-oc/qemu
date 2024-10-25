@@ -73,7 +73,7 @@ struct Esp32C3MachineState {
     ESP32C3UARTState uart[ESP32C3_UART_COUNT];
     ESP32C3GPIOState gpio;
     ESP32C3CacheState cache;
-    ESP32C3EfuseState efuse;
+    ESPEfuseState efuse;
     ESP32C3ClockState clock;
     ESP32C3GdmaState gdma;
     ESP32C3AesState aes;
@@ -405,7 +405,7 @@ static void esp32c3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(machine), "intmatrix", &ms->intmatrix, TYPE_ESP32C3_INTMATRIX);
     object_initialize_child(OBJECT(machine), "gpio", &ms->gpio, TYPE_ESP32C3_GPIO);
     object_initialize_child(OBJECT(machine), "extmem", &ms->cache, TYPE_ESP32C3_CACHE);
-    object_initialize_child(OBJECT(machine), "efuse", &ms->efuse, TYPE_ESP32C3_EFUSE);
+    object_initialize_child(OBJECT(machine), "efuse", &ms->efuse, TYPE_ESP_EFUSE);
     object_initialize_child(OBJECT(machine), "clock", &ms->clock, TYPE_ESP32C3_CLOCK);
     object_initialize_child(OBJECT(machine), "sha", &ms->sha, TYPE_ESP32C3_SHA);
     object_initialize_child(OBJECT(machine), "aes", &ms->aes, TYPE_ESP32C3_AES);

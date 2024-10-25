@@ -33,63 +33,104 @@
 #define EFUSE_OPERATION_DELAY_US    1000
 
 
-static uint64_t esp32c3_efuse_read(void *opaque, hwaddr addr, unsigned int size)
+/**
+ * Magic values for write and read operations
+ */
+#define EFUSE_WRITE_OPCODE  0x5A5A
+#define EFUSE_READ_OPCODE   0x5AA5
+
+
+/**
+ * Define a few helpers for the efuse blocks
+ */
+
+/**
+ * Returns the size of the given block, in bytes.
+ * BLOCK0 and BLOCK1 have 6 registers while other blocks have 8 registers
+ */
+static inline int esp_efuse_block_size(const uint32_t block)
 {
-    ESP32C3EfuseState *s = ESP32C3_EFUSE(opaque);
+    return (block == 0 || block == 1) ? ESP_EFUSE_BLOCK0_WORDS * sizeof(uint32_t)
+                                      : 8 * sizeof(uint32_t);
+}
+
+/**
+ * Returns true if the current command is a valid read command, false else
+ */
+static inline bool esp_efuse_is_read_cmd(ESPEfuseState *s)
+{
+    return FIELD_EX32(s->efuses.conf, EFUSE_CONF, OP_CODE) == EFUSE_READ_OPCODE &&
+           FIELD_EX32(s->efuses.cmd, EFUSE_CMD, READ) != 0;
+}
+
+/**
+ * Returns true if the current command is a valid write/program command, false else
+ */
+static inline bool esp_efuse_is_write_cmd(ESPEfuseState *s)
+{
+    return FIELD_EX32(s->efuses.conf, EFUSE_CONF, OP_CODE) == EFUSE_WRITE_OPCODE &&
+           FIELD_EX32(s->efuses.cmd, EFUSE_CMD, PGM) != 0;
+}
+
+
+static uint64_t esp_efuse_read(void *opaque, hwaddr addr, unsigned int size)
+{
+    ESPEfuseState *s = ESP_EFUSE(opaque);
     uint8_t  *content_8  = ((uint8_t*) &s->efuses) + addr;
     uint16_t *content_16 = (uint16_t*) content_8;
     uint32_t *content_32 = (uint32_t*) content_8;
 
-    assert(addr < sizeof(s->efuses));
+    uint64_t res = 0;
 
     if (size == 1) {
-        return *content_8;
+        res = *content_8;
     } else if (size == 2) {
-        return *content_16;
+        res = *content_16;
     } else {
-        return *content_32;
+        res = *content_32;
     }
+
+    return res;
 }
 
 /**
- * @brief Return the start offset in the ESP32C3EfuseRegs structure of the given block.
+ * @brief Return the start offset, in bytes, of the given block in the ESPEfuseBlocks structure.
  */
-static int esp32c3_offset_of_block(int block_num)
+static int esp_offset_of_block(int block_num)
 {
-    const int offsets[] = {
-        ESP32C3_EFUSE_BLOCK0_ADDR,
-        ESP32C3_EFUSE_BLOCK1_ADDR,
-        ESP32C3_EFUSE_BLOCK2_ADDR,
-        ESP32C3_EFUSE_BLOCK3_ADDR,
-        ESP32C3_EFUSE_BLOCK4_ADDR,
-        ESP32C3_EFUSE_BLOCK5_ADDR,
-        ESP32C3_EFUSE_BLOCK6_ADDR,
-        ESP32C3_EFUSE_BLOCK7_ADDR,
-        ESP32C3_EFUSE_BLOCK8_ADDR,
-        ESP32C3_EFUSE_BLOCK9_ADDR,
-        ESP32C3_EFUSE_BLOCK10_ADDR,
-    };
+    /* The alst block is block 10 */
+    assert(block_num <= 10);
 
-    assert(block_num < sizeof(offsets)/sizeof(int));
-    return offsets[block_num];
+    int word_offset = 0;
+
+    if (block_num > 0) {
+        word_offset += ESP_EFUSE_BLOCK0_WORDS;
+    }
+
+    if (block_num > 1) {
+        /* Skip block 1 and add the remaining blocks, all 8 words big */
+        word_offset += ESP_EFUSE_BLOCK1_WORDS + (block_num - 2) * 8;
+    }
+
+    return word_offset * sizeof(uint32_t);
 }
 
 
 /**
  * @brief Hide the protected efuses by overwriting them with 0s, this function shall be called after
- * calling `esp32c3_efuse_read`.
+ * calling `esp_efuse_read`.
  */
-static void esp32c3_hide_protected_block(ESP32C3EfuseState *s)
+static void esp_hide_protected_block(ESPEfuseState *s)
 {
-    uint32_t rd_protection = s->efuses.rd_repeat_data0.rd_dis;
+    uint32_t rd_protection = FIELD_EX32(s->efuses.blocks.rd_repeat_data0, EFUSE_RD_REPEAT_DATA0, RD_DIS);
     /* Only the BLOCK4 and upwards can be protected */
     int block_num = 4;
 
     while (rd_protection != 0) {
         if (rd_protection & 1) {
-            /* Get the offset of the block in the ESP32C3EfuseRegs structure */
-            const int offset = esp32c3_offset_of_block(block_num);
-            uint8_t* from = ((uint8_t*) &s->efuses) + offset;
+            /* Get the offset of the block in the ESPEfuseRegs structure */
+            const int offset = esp_offset_of_block(block_num);
+            uint8_t* from = ((uint8_t*) &s->efuses.blocks) + offset;
             /* The blocks that can be protected are all 32-byte long */
             memset(from, 0, 32);
         }
@@ -102,17 +143,15 @@ static void esp32c3_hide_protected_block(ESP32C3EfuseState *s)
 /**
  * @brief Load the efuses value from the block device (file)
  */
-static void esp32c3_efuse_reload_from_blk(ESP32C3EfuseState *s)
+static void esp_efuse_reload_from_blk(ESPEfuseState *s)
 {
-    /* In theory, there are 4096 bits of efuses, in practice, the memory space allocated for
-    * efuses stops at &rd_repeat_err0. */
-    const uint32_t size = offsetof(ESP32C3EfuseRegs, rd_repeat_err0) - offsetof(ESP32C3EfuseRegs, rd_wr_dis);
+    const uint32_t size = sizeof(ESPEfuseBlocks);
 
     /* Load the efuses from the block device file (or mirror) */
     if (s->blk) {
 
         /* Load the file content inside the structure, starting at efuse rd_wr_dis */
-        const int ret = blk_pread(s->blk, 0, size, &s->efuses.rd_wr_dis, 0);
+        const int ret = blk_pread(s->blk, 0, size, &s->efuses.blocks, 0);
         if (ret < 0) {
             error_report("%s: failed to read the block device (%d)", __func__, ret);
         }
@@ -120,12 +159,12 @@ static void esp32c3_efuse_reload_from_blk(ESP32C3EfuseState *s)
     } else {
 
         assert(s->mirror);
-        memcpy(&s->efuses.rd_wr_dis, s->mirror, size);
+        memcpy(&s->efuses.blocks, s->mirror, size);
 
     }
 
     /* Copy the efuses to the internal mirror */
-    memcpy(&s->efuses_internal.rd_wr_dis, &s->efuses.rd_wr_dis, size);
+    memcpy(&s->efuses_internal.blocks, &s->efuses.blocks, size);
 }
 
 /**
@@ -133,10 +172,10 @@ static void esp32c3_efuse_reload_from_blk(ESP32C3EfuseState *s)
  * A bit set to 1 marks a protected bit whereas a 0 marks an unprotected bit.
  *
  * @param wr_dis Write-disable register
- * @param block0_mask Mask containing exactly ESP32C3_EFUSE_BLOCK0_WORDS words that will
+ * @param block0_mask Mask containing exactly ESP_EFUSE_BLOCK0_WORDS words that will
  *                    be filled with the masks described above.
  */
-static void esp32c3_efuse_get_block0_protected_mask(uint32_t wr_dis, uint32_t *block0_mask)
+static void esp_efuse_get_block0_protected_mask(uint32_t wr_dis, uint32_t *block0_mask)
 {
     /* Define the constants that for each bit of wr_dis represent the word index they affect
      * and the bits they protect */
@@ -169,7 +208,7 @@ static void esp32c3_efuse_get_block0_protected_mask(uint32_t wr_dis, uint32_t *b
         [31] = { 1, 0x00070000 },
     };
 
-    memset(block0_mask, 0, ESP32C3_EFUSE_BLOCK0_WORDS * sizeof(uint32_t));
+    memset(block0_mask, 0, ESP_EFUSE_BLOCK0_WORDS * sizeof(uint32_t));
 
     /* Go through all the bits of the write-disable mask and set the appropriate mask if the bit
      * is set. Ignore bits from 20 to 29 included which are not about BLOCK 0 protection. */
@@ -189,12 +228,12 @@ static void esp32c3_efuse_get_block0_protected_mask(uint32_t wr_dis, uint32_t *b
  * @brief Write a given efuses block to the block device (file) if not protected.
  * Returns true if the block was flashed successfully, false else.
  */
-static bool esp32c3_efuse_write_to_blk(ESP32C3EfuseState *s, const int block)
+static bool esp_efuse_write_to_blk(ESPEfuseState *s, const int block)
 {
-    const int size =  esp32c3_efuse_block_size(block);
+    const int size =  esp_efuse_block_size(block);
     bool protected = false;
     /* Mask of protected bit for each word of a BLOCK, only used when writing BLOCK0 */
-    uint32_t block_mask[ESP32C3_EFUSE_PGM_DATA_COUNT] = { 0 };
+    uint32_t block_mask[ESP_EFUSE_PGM_DATA_COUNT] = { 0 };
 
     /* If the block to protect is not BLOCK0 the check is rather simple */
     if (block != 0) {
@@ -202,35 +241,36 @@ static bool esp32c3_efuse_write_to_blk(ESP32C3EfuseState *s, const int block)
         /* BLOCK1 protection is bit 20, BLOCK2 protection is bit 21, etc... */
         const int offset = 19 + block;
         /* If the bit is 1, protection is enabled, we cannot write */
-        protected = (s->efuses.rd_wr_dis >> offset) & 1;
+        protected = (s->efuses.blocks.rd_wr_dis >> offset) & 1;
     } else {
         /* BLOCK0 protection is done on a bit granularity, so for each word that composes it
          * get mask where 1 represents a protected bit, and 0 represents an unprotected bit */
-        esp32c3_efuse_get_block0_protected_mask(s->efuses.rd_wr_dis, block_mask);
+        esp_efuse_get_block0_protected_mask(s->efuses.blocks.rd_wr_dis, block_mask);
     }
 
     if (!protected) {
-        /* Get the offset of the block in the ESP32C3EfuseRegs structure!
+        /* Get the offset of the block in the ESPEfuseRegs structure!
          * Subtract the offset of the BLOCK0 to get the offset of our block in the
          * binary file (blk).
          * The offset in struct must be in 32-bit words */
-        const uint32_t offset_in_struct = esp32c3_offset_of_block(block) / sizeof(uint32_t);
+        const uint32_t offset_in_struct = esp_offset_of_block(block) / sizeof(uint32_t);
         /* Offset in file must be in bytes */
-        const uint32_t offset_in_file = esp32c3_offset_of_block(block) - esp32c3_offset_of_block(0);
+        const uint32_t offset_in_file = esp_offset_of_block(block);
 
         /* Generate the actual data to write to the file. Indeed, the programmed bits (1) shall
          * NOT be programmed to 0 as on real hardware an efuse cannot be reverted.
          * To do so, OR the content to burn with the existing content so that the 1s are never erased. */
-        uint32_t *efuses = (uint32_t*) &s->efuses;
-        uint32_t real_data[ESP32C3_EFUSE_PGM_DATA_COUNT];
+        uint32_t *efuses = (uint32_t*) &s->efuses.blocks;
+        uint32_t *new_data = s->efuses.pgm_data;
+        uint32_t real_data[ESP_EFUSE_PGM_DATA_COUNT];
 
-        for (int i = 0; i < ESP32C3_EFUSE_PGM_DATA_COUNT; i++) {
+        for (int i = 0; i < ESP_EFUSE_PGM_DATA_COUNT; i++) {
             /* Offset of pgm_data is 0, let's use efuses[i] to retrieve the data.
              * efuses[i] represents the new value, efuses[offset_in_struct + i] represents the old value,
              * block_mask represents the protection, with 1 marking a bit as protected.
              * As such, the final result of an efuse value is:
              * Y = old_value | (~block_mask & new_value) */
-            real_data[i] = efuses[offset_in_struct + i] | (~block_mask[i] & efuses[i]);
+            real_data[i] = efuses[offset_in_struct + i] | (~block_mask[i] & new_data[i]);
         }
 
         /* Write the new block data to the file (or RAM) */
@@ -244,7 +284,7 @@ static bool esp32c3_efuse_write_to_blk(ESP32C3EfuseState *s, const int block)
         } else {
 
             assert(s->mirror);
-            memcpy(s->mirror + offset_in_file, real_data, size);
+            memcpy((uint8_t*) s->mirror + offset_in_file, real_data, size);
 
         }
     }
@@ -259,139 +299,137 @@ static bool esp32c3_efuse_write_to_blk(ESP32C3EfuseState *s, const int block)
  * It will set the raw status of the efuse component. If the requested operation was a read,
  * it will perform the read from the binary file (blk) here.
  */
-static void esp32c3_efuse_timer_cb(void *opaque)
+static void esp_efuse_timer_cb(void *opaque)
 {
-    ESP32C3EfuseState *s = ESP32C3_EFUSE(opaque);
+    ESPEfuseState *s = ESP_EFUSE(opaque);
 
     /* To make sure the command register did not change between the moment the operation was scheduled
      * and the moment the callback was triggered, restore its value to its original one. (mirror)
      * In any case, it will be set to 0 at the end of this function */
-    s->efuses.cmd.val = s->op_cmd_mirror;
+    s->efuses.cmd = s->op_cmd_mirror;
 
     /* No need to check the opcode again */
-    if (s->efuses.cmd.read_cmd) {
-        esp32c3_efuse_reload_from_blk(s);
-        esp32c3_hide_protected_block(s);
-        s->efuses.int_raw.read_done = 1;
+    if (FIELD_EX32(s->efuses.cmd, EFUSE_CMD, READ) != 0) {
+        esp_efuse_reload_from_blk(s);
+        esp_hide_protected_block(s);
+        s->efuses.int_raw |= R_EFUSE_INT_RAW_READ_DONE_MASK;
     } else {
-        assert(s->efuses.cmd.pgm_cmd);
-        s->efuses.int_raw.pgm_done = 1;
+        assert(FIELD_EX32(s->efuses.cmd, EFUSE_CMD, PGM) != 0);
+        s->efuses.int_raw |= R_EFUSE_INT_RAW_PGM_DONE_MASK;
     }
 
     /* In any case, reset the command register to show that the operation is finished */
-    s->efuses.cmd.val = 0;
+    s->efuses.cmd = 0;
 
     /* Set the interrupt bits, if any is 1, trigger an interrupt */
-    s->efuses.int_st.val = s->efuses.int_ena.val | s->efuses.int_raw.val;
-    if (s->efuses.int_st.val) {
+    s->efuses.int_st = s->efuses.int_ena | s->efuses.int_raw;
+    if (s->efuses.int_st) {
         qemu_irq_raise(s->irq);
     }
 }
 
 
 /**
- * @brief Start ESP32C3EfuseState's timer to simulate the efuse operation delay
+ * @brief Start ESPEfuseState's timer to simulate the efuse operation delay
  */
-static void esp32c3_efuse_op_timer_start(ESP32C3EfuseState *s)
+static void esp_efuse_op_timer_start(ESPEfuseState *s)
 {
     const uint64_t ns_now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     const uint64_t interval_ns = EFUSE_OPERATION_DELAY_US * 1000;
     timer_mod_anticipate_ns(&s->op_timer, ns_now + interval_ns);
 }
 
-static uint32_t esp32c3_efuse_dis_download_manual_encrypt(ESP32C3EfuseState *s)
+static uint32_t esp_efuse_dis_download_manual_encrypt(ESPEfuseState *s)
 {
-    return s->efuses.rd_repeat_data0.dis_download_manual_encrypt;
+    return FIELD_EX32(s->efuses.blocks.rd_repeat_data0, EFUSE_RD_REPEAT_DATA0, DIS_DOWNLOAD_MANUAL_ENCRYPT) != 0;
 }
 
-static uint32_t esp32c3_efuse_get_spi_boot_crypt_cnt(ESP32C3EfuseState *s)
+static uint32_t esp_efuse_get_spi_boot_crypt_cnt(ESPEfuseState *s)
 {
-    return s->efuses.rd_repeat_data1.spi_boot_crypt_cnt;
+    return FIELD_EX32(s->efuses.blocks.rd_repeat_data1, EFUSE_RD_REPEAT_DATA1, SPI_BOOT_CRYPT_CNT) != 0;
 }
 
-static void esp32c3_efuse_write(void *opaque, hwaddr addr,
+static void esp_efuse_write(void *opaque, hwaddr addr,
                        uint64_t value, unsigned int size)
 {
-    ESP32C3EfuseState *s = ESP32C3_EFUSE(opaque);
-    /* Address of the register to write if we consider efuses as an array of bytes */
-    uint8_t  *content_8  = ((uint8_t*) &s->efuses) + addr;
-    uint16_t *content_16 = (uint16_t*) content_8;
-    uint32_t *content_32 = (uint32_t*) content_8;
+    ESPEfuseState *s = ESP_EFUSE(opaque);
 
 #if EFUSE_DEBUG
     info_report("[EFUSE] Writing to 0x%08lx = 0x%08lx (size: %d)", addr, value, size);
 #endif
 
     /* Check if the programming cmd block is being written */
-    if (addr == offsetof(ESP32C3EfuseRegs, cmd)) {
+    if (addr == A_EFUSE_CMD) {
 
-        s->efuses.cmd.val = (uint32_t) value;
+        s->efuses.cmd = (uint32_t) value;
 
         /* The command bit and the opcode will be check by the underlying function */
-        if (esp32c3_efuse_is_read_cmd(s)) {
+        if (esp_efuse_is_read_cmd(s)) {
 
             /* Save the register value and schedule a timer to simulate real efuse loading delay,
              * the copy will be done in the callback. */
             s->op_cmd_mirror = (uint32_t) value;
-            esp32c3_efuse_op_timer_start(s);
+            esp_efuse_op_timer_start(s);
 
-        } else if (esp32c3_efuse_is_write_cmd(s)) {
+        } else if (esp_efuse_is_write_cmd(s)) {
 
-            const bool success = esp32c3_efuse_write_to_blk(s, s->efuses.cmd.blk_num);
+            const uint32_t blk_num = FIELD_EX32(s->efuses.cmd, EFUSE_CMD, BLK_NUM);
+            const bool success = esp_efuse_write_to_blk(s, blk_num);
 
             if (success) {
                 /* Same as for the read, schedule the timer and perform the actual transfer once it elapsed */
                 s->op_cmd_mirror = (uint32_t) value;
-                esp32c3_efuse_op_timer_start(s);
+                esp_efuse_op_timer_start(s);
             } else {
-                s->efuses.cmd.val = 0;
+                s->efuses.cmd = 0;
                 s->op_cmd_mirror = 0;
             }
         } else {
-            s->efuses.cmd.val = 0;
+            s->efuses.cmd = 0;
         }
 
         return;
-    }
+    } else if (addr <= A_EFUSE_PGM_CHECK_VALUE2_REG) {
+         /* The first PGM registers can be written freely */
+        void* pgm = ((uint8_t*) (s->efuses.pgm_data)) + addr;
 
-    /* The first registers, up to rd_wr_dis excluded, can be written to freely */
-    if (addr < offsetof(ESP32C3EfuseRegs, rd_wr_dis))
-    {
         if (size == 1) {
-            *content_8 = value & 0xff;
+            *((uint8_t*) pgm) = value & 0xff;
         } else if (size == 2) {
-            *content_16 = value & 0xffff;
+            *((uint16_t*) pgm) = value & 0xffff;
         } else {
-            *content_32 = value;
+            *((uint32_t*) pgm) = value;
         }
 
         return;
     }
 
-    /* Treat the interrupt-related cases separately */
+    /* Treat the interrupt-related cases separately, make sure we only access the registers below as 32-bit words */
+    assert(size >= 4);
+
     switch (addr) {
-        case offsetof(ESP32C3EfuseRegs, int_clr):
+        case A_EFUSE_INT_CLR:
             /* Only clear the bits that are set to 1 in the value */
-            s->efuses.int_raw.val &= ((~value) & 0b11);
+            s->efuses.int_raw &= ((~value) & 0b11);
             break;
-        case offsetof(ESP32C3EfuseRegs, int_raw):
-            s->efuses.int_raw.val = 0;
+        case A_EFUSE_INT_RAW:
+            s->efuses.int_raw = 0;
             break;
-        case offsetof(ESP32C3EfuseRegs, int_ena):
-            s->efuses.int_ena.val = value & 0b11;
+        case A_EFUSE_INT_ENA:
+            s->efuses.int_ena = value & 0b11;
             break;
 
         /* For debugging purposes */
-        case offsetof(ESP32C3EfuseRegs, dbg_erase_all):
+        case A_EFUSE_DBG_ERASE_ALL:
             {
 #if EFUSE_DEBUG
                 info_report("[EFUSE] erasing all efuses!");
 #endif
-                uint32_t fuse_size = offsetof(ESP32C3EfuseRegs, rd_repeat_err0) - offsetof(ESP32C3EfuseRegs, rd_wr_dis);
-                memset(&s->efuses.rd_wr_dis, 0, fuse_size);
+                const uint32_t fuse_size = sizeof(ESPEfuseBlocks);
+                memset(&s->efuses.blocks, 0, fuse_size);
 
                 if (s->blk) {
-                    int ret = blk_pwrite(s->blk, 0, fuse_size, &s->efuses.rd_wr_dis, 0);
+                    int ret = blk_pwrite(s->blk, 0, fuse_size, &s->efuses.blocks, 0);
                     if (ret != 0) {
                         error_report("ERROR WRITING FILE: %d\n", ret);
                         exit(1);
@@ -399,80 +437,82 @@ static void esp32c3_efuse_write(void *opaque, hwaddr addr,
                 } else {
 
                     assert(s->mirror);
-                    memset(s->mirror, 0, ESP32C3_EFUSE_BYTE_COUNT);
+                    memset(s->mirror, 0, fuse_size);
                 }
             }
             return;
 
-        case offsetof(ESP32C3EfuseRegs, clk):
-        case offsetof(ESP32C3EfuseRegs, conf):
-        case offsetof(ESP32C3EfuseRegs, dac_conf):
-        case offsetof(ESP32C3EfuseRegs, rd_tim_conf):
-        case offsetof(ESP32C3EfuseRegs, wr_tim_conf1):
-        case offsetof(ESP32C3EfuseRegs, wr_tim_conf2):
-            /* Make sure we write these registers with a 32-bit access */
-            assert(size >= 4);
-            *content_32 = value;
-            /* Fall-through */
-
+        case A_EFUSE_CLK:
+            s->efuses.clk = value;
+            return;
+        case A_EFUSE_CONF:
+            s->efuses.conf = value;
+            return;
+        case A_EFUSE_DAC_CONF:
+            s->efuses.dac_conf = value;
+            return;
+        case A_EFUSE_RD_TIM_CONF:
+            s->efuses.rd_tim_conf = value;
+            return;
+        case A_EFUSE_WR_TIM_CONF1:
+            s->efuses.wr_tim_conf1 = value;
+            return;
+        case A_EFUSE_WR_TIM_CONF2:
+            s->efuses.wr_tim_conf2 = value;
+            return;
         /* The other registers are read-only */
         default:
             return;
     }
 
     /* Check if any interrupt needs to be triggered or, on the contrary, lowered */
-    const uint32_t new_status = (s->efuses.int_ena.val | s->efuses.int_raw.val) & 0b11;
-    s->efuses.int_st.val = new_status;
+    const uint32_t new_status = (s->efuses.int_ena | s->efuses.int_raw) & 0b11;
+    s->efuses.int_st = new_status;
 
     qemu_set_irq(s->irq, new_status ? 1 : 0);
 }
 
 
-static const MemoryRegionOps esp32c3_efuse_ops = {
-    .read =  esp32c3_efuse_read,
-    .write = esp32c3_efuse_write,
+static const MemoryRegionOps esp_efuse_ops = {
+    .read =  esp_efuse_read,
+    .write = esp_efuse_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
 
-static void esp32c3_efuse_reset(DeviceState *dev)
+static void esp_efuse_reset(DeviceState *dev)
 {
-    ESP32C3EfuseState *s = ESP32C3_EFUSE(dev);
+    ESPEfuseState *s = ESP_EFUSE(dev);
     timer_del(&s->op_timer);
     qemu_irq_lower(s->irq);
-    esp32c3_efuse_reload_from_blk(s);
-    esp32c3_hide_protected_block(s);
+    esp_efuse_reload_from_blk(s);
+    esp_hide_protected_block(s);
 }
 
-static void esp32c3_efuse_realize(DeviceState *dev, Error **errp)
+static void esp_efuse_realize(DeviceState *dev, Error **errp)
 {
-    ESP32C3EfuseState *s = ESP32C3_EFUSE(dev);
+    ESPEfuseState *s = ESP_EFUSE(dev);
     const char* error_msg = NULL;
 
     /* If no file was given as efuses, create a temporary one (in RAM). */
     if (s->blk == NULL) {
-        s->mirror = g_malloc(ESP32C3_EFUSE_BYTE_COUNT);
+        const uint32_t size = sizeof(ESPEfuseBlocks);
+        s->mirror = g_malloc(size);
         if (s->mirror == NULL) {
             error_msg = "failed to allocate memory for efuses";
             goto error;
         }
 
-        memset(s->mirror, 0, ESP32C3_EFUSE_BYTE_COUNT);
 
         /* Set the chip revision to v0.3 and write it to the file */
-        s->efuses.rd_mac_spi_sys_3.wafer_version_minor_low = 3;
+        s->efuses.blocks.rd_mac_spi_sys_3 = FIELD_DP32(0, EFUSE_RD_MAC_SPI_SYS_3, WAFER_VER_MINOR_LO, 3);
 
         /* Set the chip eFuse block revision 1.3 */
-        s->efuses.rd_sys_part1_data4.blk_version_major = 1;
-        s->efuses.rd_mac_spi_sys_3.blk_version_minor = 3;
+        s->efuses.blocks.rd_sys_part1_data4 = FIELD_DP32(0, EFUSE_RD_SYS_PART1_DATA4, BLK_VERSION_MAJOR, 1);
+        s->efuses.blocks.rd_mac_spi_sys_3 = FIELD_DP32(s->efuses.blocks.rd_mac_spi_sys_3,
+                                                       EFUSE_RD_MAC_SPI_SYS_3, BLK_VERSION_MINOR, 3);
 
-        /* No need to rewrite the all the efuses, write rd_mac_spi_sys_3... */
-        uint32_t* word_mirror = (uint32_t*) s->mirror;
-        uint32_t idx = (offsetof(ESP32C3EfuseRegs, rd_mac_spi_sys_3) - esp32c3_offset_of_block(0)) / sizeof(uint32_t);
-        word_mirror[idx] = s->efuses.rd_mac_spi_sys_3.val;
-        /* and rd_sys_part1_data4 value to the mirror in RAM */
-        idx = (offsetof(ESP32C3EfuseRegs, rd_sys_part1_data4) - esp32c3_offset_of_block(0)) / sizeof(uint32_t);
-        word_mirror[idx] = s->efuses.rd_sys_part1_data4.val;
+        memcpy(s->mirror, &s->efuses.blocks, size);
 
     } else {
         /* A block was given as a parameter, open it in READ/WRITE */
@@ -488,60 +528,60 @@ static void esp32c3_efuse_realize(DeviceState *dev, Error **errp)
             goto error;
         }
 
-        esp32c3_efuse_reset((DeviceState*) s);
+        esp_efuse_reset((DeviceState*) s);
     }
 
     /* State machine is ready */
-    s->efuses.status.state = 1;
+    s->efuses.status = FIELD_DP32(0, EFUSE_STATUS, STATE, 1);
 
     return;
 error:
     error_setg(errp, "%s: %s", __func__, error_msg);
 }
 
-static void esp32c3_efuse_init(Object *obj)
+static void esp_efuse_init(Object *obj)
 {
-    ESP32C3EfuseState *s = ESP32C3_EFUSE(obj);
+    ESPEfuseState *s = ESP_EFUSE(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
-    memory_region_init_io(&s->iomem, obj, &esp32c3_efuse_ops, s,
-                          TYPE_ESP32C3_EFUSE, ESP32C3_EFUSE_IO_RANGE_SIZE);
+    memory_region_init_io(&s->iomem, obj, &esp_efuse_ops, s,
+                          TYPE_ESP_EFUSE, ESP_EFUSE_IO_RANGE_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
 
-    timer_init_ns(&s->op_timer, QEMU_CLOCK_VIRTUAL, esp32c3_efuse_timer_cb, s);
+    timer_init_ns(&s->op_timer, QEMU_CLOCK_VIRTUAL, esp_efuse_timer_cb, s);
 }
 
-static Property esp32c3_efuse_properties[] = {
-    DEFINE_PROP_DRIVE("drive", ESP32C3EfuseState, blk),
+static Property esp_efuse_properties[] = {
+    DEFINE_PROP_DRIVE("drive", ESPEfuseState, blk),
     DEFINE_PROP_END_OF_LIST(),
 };
 
-static void esp32c3_efuse_class_init(ObjectClass *klass, void *data)
+static void esp_efuse_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
-    ESP32C3EfuseClass* esp32c3_efuse = ESP32C3_EFUSE_CLASS(klass);
+    ESPEfuseClass* esp_efuse = ESP_EFUSE_CLASS(klass);
 
-    dc->reset = esp32c3_efuse_reset;
-    dc->realize = esp32c3_efuse_realize;
-    device_class_set_props(dc, esp32c3_efuse_properties);
+    dc->reset = esp_efuse_reset;
+    dc->realize = esp_efuse_realize;
+    device_class_set_props(dc, esp_efuse_properties);
 
-    esp32c3_efuse->get_spi_boot_crypt_cnt = esp32c3_efuse_get_spi_boot_crypt_cnt;
-    esp32c3_efuse->get_dis_downlaod_man_encrypt = esp32c3_efuse_dis_download_manual_encrypt;
+    esp_efuse->get_spi_boot_crypt_cnt = esp_efuse_get_spi_boot_crypt_cnt;
+    esp_efuse->get_dis_download_man_encrypt = esp_efuse_dis_download_manual_encrypt;
 }
 
-static const TypeInfo esp32c3_efuse_info = {
-    .name = TYPE_ESP32C3_EFUSE,
+static const TypeInfo esp_efuse_info = {
+    .name = TYPE_ESP_EFUSE,
     .parent = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(ESP32C3EfuseState),
-    .instance_init = esp32c3_efuse_init,
-    .class_init = esp32c3_efuse_class_init,
-    .class_size = sizeof(ESP32C3EfuseClass)
+    .instance_size = sizeof(ESPEfuseState),
+    .instance_init = esp_efuse_init,
+    .class_init = esp_efuse_class_init,
+    .class_size = sizeof(ESPEfuseClass)
 };
 
-static void esp32c3_efuse_register_types(void)
+static void esp_efuse_register_types(void)
 {
-    type_register_static(&esp32c3_efuse_info);
+    type_register_static(&esp_efuse_info);
 }
 
-type_init(esp32c3_efuse_register_types)
+type_init(esp_efuse_register_types)
