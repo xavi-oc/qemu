@@ -49,7 +49,7 @@
 #include "hw/char/esp32s3_uart.h"
 #include "hw/misc/esp32s3_rng.h"
 
-#include "hw/nvram/esp32c3_efuse.h"
+#include "hw/nvram/esp32s3_efuse.h"
 #include "hw/xtensa/esp32s3_clk.h"
 #include "hw/dma/esp32s3_gdma.h"
 #include "hw/misc/esp32s3_sha.h"
@@ -130,7 +130,7 @@ typedef struct Esp32s3SocState {
     MemoryRegion cpu_specific_mem[ESP32S3_CPU_COUNT];
     ESP32S3SpiState spi1;
     ESP32S3CacheState cache;
-    ESPEfuseState efuse;
+    ESP32S3EfuseState efuse;
     ESP32S3ClockState clock;
     ESP32S3GdmaState gdma;
     ESP32S3ShaState sha;
@@ -595,7 +595,7 @@ static void esp32s3_machine_init(MachineState *machine)
 
     object_initialize_child(OBJECT(ss), "extmem", &ss->cache, TYPE_ESP32S3_CACHE);
     object_initialize_child(OBJECT(ss), "spi1", &ss->spi1, TYPE_ESP32S3_SPI);
-    object_initialize_child(OBJECT(ss), "efuse", &ss->efuse, TYPE_ESP_EFUSE);
+    object_initialize_child(OBJECT(ss), "efuse", &ss->efuse, TYPE_ESP32S3_EFUSE);
     object_initialize_child(OBJECT(ss), "jtag", &ss->jtag, TYPE_ESP32C3_JTAG);
     object_initialize_child(OBJECT(ss), "gpio", &ss->gpio, TYPE_ESP32S3_GPIO);
     object_initialize_child(OBJECT(ss), "rng", &ss->rng, TYPE_ESP32S3_RNG);
@@ -768,7 +768,7 @@ static void esp32s3_machine_init(MachineState *machine)
 
     /* HMAC realization */
     {
-        ss->hmac.efuse = &ss->efuse;
+        ss->hmac.efuse = ESP_EFUSE(&ss->efuse);
         qdev_realize(DEVICE(&ss->hmac), &ss->periph_bus, &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->hmac), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_HMAC_BASE, mr, 0);
@@ -787,7 +787,7 @@ static void esp32s3_machine_init(MachineState *machine)
     }
     /* XTS-AES realization */
     {
-        ss->xts_aes.efuse = &ss->efuse;
+        ss->xts_aes.efuse = ESP_EFUSE(&ss->efuse);
         ss->xts_aes.clock = &ss->clock;
         qdev_realize(DEVICE(&ss->xts_aes), &ss->periph_bus, &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->xts_aes), 0);

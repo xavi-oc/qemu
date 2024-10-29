@@ -88,9 +88,11 @@ static uint32_t esp32s3_xts_aes_get_linesize(ESP32S3XtsAesState *s)
 
 static uint32_t esp32s3_xts_aes_get_key_size(ESP32S3XtsAesState *s)
 {
+    ESPEfuseClass *efuse_class = ESP_EFUSE_GET_CLASS(s->efuse);
+
     for (int i = EFUSE_BLOCK_KEY0; i < EFUSE_BLOCK_KEY6; i++) {
-        if (esp_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1
-            || esp_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_2) {
+        if (efuse_class->get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1
+         || efuse_class->get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_2) {
             return XTS_AES_KEY_SIZE_256;
         }
     }
@@ -110,12 +112,13 @@ static void reverse_xts_aes_key(uint8_t *key)
 
 static void esp32s3_xts_aes_get_key(ESP32S3XtsAesState *s, uint8_t *key, uint32_t key_size)
 {
+    ESPEfuseClass *efuse_class = ESP_EFUSE_GET_CLASS(s->efuse);
     memset(key, 0, key_size);
 
     if (key_size == XTS_AES_KEY_SIZE_128) {
         for (int i = EFUSE_BLOCK_KEY0; i < EFUSE_BLOCK_KEY6; i++) {
-            if (esp_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_128_KEY) {
-                esp_efuse_get_key(s->efuse, i, key);
+            if (efuse_class->get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_128_KEY) {
+                efuse_class->get_key(s->efuse, i, key);
                 // flash encryption key is stored in reverse byte order in the efuse block, correct it
                 reverse_xts_aes_key(key);
                 return;
@@ -124,11 +127,11 @@ static void esp32s3_xts_aes_get_key(ESP32S3XtsAesState *s, uint8_t *key, uint32_
     } else {
         // key_size == XTS_AES_KEY_SIZE_256
         for (int i = EFUSE_BLOCK_KEY0; i < EFUSE_BLOCK_KEY6; i++) {
-            if (esp_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1) {
-                esp_efuse_get_key(s->efuse, i, key);
+            if (efuse_class->get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_1) {
+                efuse_class->get_key(s->efuse, i, key);
                 reverse_xts_aes_key(key);
-            } else if (esp_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_2) {
-                esp_efuse_get_key(s->efuse, i, key + XTS_AES_KEY_SIZE_128);
+            } else if (efuse_class->get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_256_KEY_2) {
+                efuse_class->get_key(s->efuse, i, key + XTS_AES_KEY_SIZE_128);
                 reverse_xts_aes_key(key + XTS_AES_KEY_SIZE_128);
             }
         }

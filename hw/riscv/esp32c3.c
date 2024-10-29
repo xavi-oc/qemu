@@ -73,7 +73,7 @@ struct Esp32C3MachineState {
     ESP32C3UARTState uart[ESP32C3_UART_COUNT];
     ESP32C3GPIOState gpio;
     ESP32C3CacheState cache;
-    ESPEfuseState efuse;
+    ESP32C3EfuseState efuse;
     ESP32C3ClockState clock;
     ESP32C3GdmaState gdma;
     ESP32C3AesState aes;
@@ -405,7 +405,7 @@ static void esp32c3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(machine), "intmatrix", &ms->intmatrix, TYPE_ESP32C3_INTMATRIX);
     object_initialize_child(OBJECT(machine), "gpio", &ms->gpio, TYPE_ESP32C3_GPIO);
     object_initialize_child(OBJECT(machine), "extmem", &ms->cache, TYPE_ESP32C3_CACHE);
-    object_initialize_child(OBJECT(machine), "efuse", &ms->efuse, TYPE_ESP_EFUSE);
+    object_initialize_child(OBJECT(machine), "efuse", &ms->efuse, TYPE_ESP32C3_EFUSE);
     object_initialize_child(OBJECT(machine), "clock", &ms->clock, TYPE_ESP32C3_CLOCK);
     object_initialize_child(OBJECT(machine), "sha", &ms->sha, TYPE_ESP32C3_SHA);
     object_initialize_child(OBJECT(machine), "aes", &ms->aes, TYPE_ESP32C3_AES);
@@ -609,7 +609,7 @@ static void esp32c3_machine_init(MachineState *machine)
 
     /* HMAC realization */
     {
-        ms->hmac.efuse = &ms->efuse;
+        ms->hmac.efuse = ESP_EFUSE(&ms->efuse);
         qdev_realize(DEVICE(&ms->hmac), &ms->periph_bus, &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->hmac), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_HMAC_BASE, mr, 0);
@@ -628,7 +628,7 @@ static void esp32c3_machine_init(MachineState *machine)
 
     /* XTS-AES realization */
     {
-        ms->xts_aes.efuse = &ms->efuse;
+        ms->xts_aes.efuse = ESP_EFUSE(&ms->efuse);
         ms->xts_aes.clock = &ms->clock;
         qdev_realize(DEVICE(&ms->xts_aes), &ms->periph_bus, &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->xts_aes), 0);

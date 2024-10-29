@@ -74,9 +74,11 @@ static bool esp32c3_xts_aes_is_flash_enc_enabled(ESP32C3XtsAesState *s)
 
 static void esp32c3_xts_aes_get_key(ESP32C3XtsAesState *s, uint8_t *key)
 {
+    ESPEfuseClass *efuse_class = ESP_EFUSE_GET_CLASS(s->efuse);
+
     for (int i = EFUSE_BLOCK_KEY0; i < EFUSE_BLOCK_KEY6; i++) {
-        if (esp_efuse_get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_128_KEY) {
-            esp_efuse_get_key(s->efuse, i, key);
+        if (efuse_class->get_key_purpose(s->efuse, i) == EFUSE_KEY_PURPOSE_XTS_AES_128_KEY) {
+            efuse_class->get_key(s->efuse, i, key);
             // flash encryption key is stored in reverse byte order in the efuse block, correct it
             uint8_t temp;
             for (int j = 0; j < XTS_AES_KEY_SIZE / 2; j++) {

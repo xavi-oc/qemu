@@ -22,7 +22,8 @@
 static void esp32c3_hmac_start(ESP32C3HmacState *s)
 {
     uint8_t efuse_key[32];
-    esp_efuse_get_key(s->efuse, s->efuse_block_num, efuse_key);
+    ESPEfuseClass *efuse_class = ESP_EFUSE_GET_CLASS(s->efuse);
+    efuse_class->get_key(s->efuse, s->efuse_block_num, efuse_key);
     hmac_sha256_init(&s->ctx, efuse_key, sizeof(efuse_key));
     s->message_write_complete = 0;
 }
@@ -43,6 +44,7 @@ static void esp32c3_hmac_finish(ESP32C3HmacState *s, uint32_t *result)
 static uint64_t esp32c3_hmac_read(void *opaque, hwaddr addr, unsigned int size)
 {
     ESP32C3HmacState *s = ESP32C3_HMAC(opaque);
+    ESPEfuseClass *efuse_class = ESP_EFUSE_GET_CLASS(s->efuse);
 
     uint64_t r = 0;
     switch (addr) {
@@ -51,7 +53,7 @@ static uint64_t esp32c3_hmac_read(void *opaque, hwaddr addr, unsigned int size)
             break;
 
         case A_HMAC_QUERY_ERROR_REG:
-            r = esp_efuse_get_key_purpose(s->efuse, s->efuse_block_num) == s->efuse_key_purpose ? 0 : 1;
+            r = efuse_class->get_key_purpose(s->efuse, s->efuse_block_num) == s->efuse_key_purpose ? 0 : 1;
             break;
 
         case A_HMAC_QUERY_BUSY_REG:
