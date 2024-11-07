@@ -93,8 +93,8 @@ static const struct MemmapEntry {
     [ESP32S3_MEMREGION_IROM] = { 0x40000000, 0x60000 },
     [ESP32S3_MEMREGION_DRAM] = { 0x3FC80000, 0x170000 },
     [ESP32S3_MEMREGION_IRAM] = { 0x40370000, 0x80000 },
-    [ESP32S3_MEMREGION_DCACHE] = { 0x3C000000, 0x02000000 },
-    [ESP32S3_MEMREGION_ICACHE] = { 0x42000000, 0x20000000 },
+    [ESP32S3_MEMREGION_DCACHE] = { 0x3c000000, ESP32S3_EXTMEM_REGION_SIZE },
+    [ESP32S3_MEMREGION_ICACHE] = { 0x42000000, ESP32S3_EXTMEM_REGION_SIZE },
     [ESP32S3_MEMREGION_RTCSLOW] = { 0x50000000, 0x2000 },
     [ESP32S3_MEMREGION_RTCFAST] = { 0x600fe000, 0x2000 },
     /* Virtual Framebuffer, used for the graphical interface */
@@ -148,6 +148,7 @@ typedef struct Esp32s3SocState {
 
     MemoryRegion iomem;
     DeviceState *eth;
+    SsiPsramState *psram;
 
     uint32_t requested_reset;
 } Esp32s3SocState;
@@ -276,6 +277,21 @@ static void esp32s3_init_spi_flash(Esp32s3SocState *ms, BlockBackend* blk)
                                 qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0));
 }
 
+static void esp32s3_machine_init_psram(Esp32s3SocState *ms, uint32_t size_mbytes)
+{
+    /* PSRAM attached to SPI1, CS1 */
+    DeviceState *spi_master = DEVICE(&ms->spi1);
+    BusState* spi_bus = qdev_get_child_bus(spi_master, "spi");
+    DeviceState *psram = qdev_new(TYPE_SSI_PSRAM);
+    qdev_prop_set_uint32(psram, "size_mbytes", size_mbytes);
+    qdev_prop_set_uint8(psram, "cs", 1);
+    qdev_prop_set_uint32(psram, "dummy", 0);
+    qdev_realize(psram, spi_bus, &error_fatal);
+    ms->psram = SSI_PSRAM(psram);
+    qdev_connect_gpio_out_named(spi_master, SSI_GPIO_CS, 1,
+                                qdev_get_gpio_in_named(psram, SSI_GPIO_CS, 0));
+}
+
 struct Esp32s3MachineState {
     MachineState parent;
 
@@ -337,24 +353,12 @@ static void esp32s3_soc_realize(DeviceState *dev, Error **errp)
         snprintf(name, sizeof(name), "esp32s3.drom.cpu%d", i);
         memory_region_init_alias(drom, NULL, name, irom, offset_in_orig, memmap[ESP32S3_MEMREGION_DROM].size);
         memory_region_add_subregion(sys_mem, memmap[ESP32S3_MEMREGION_DROM].base, drom);
-
-
     }
 
 
     memory_region_init_ram(iram, NULL, "esp32s3.iram",
                            memmap[ESP32S3_MEMREGION_IRAM].size, &error_fatal);
     memory_region_add_subregion(sys_mem, memmap[ESP32S3_MEMREGION_IRAM].base, iram);
-
-    MemoryRegion *icache = g_new(MemoryRegion, 1);
-    memory_region_init_ram(icache, NULL, "esp32s3.icache",
-                           memmap[ESP32S3_MEMREGION_ICACHE].size, &error_fatal);
-    memory_region_add_subregion(sys_mem, memmap[ESP32S3_MEMREGION_ICACHE].base, icache);
-
-    MemoryRegion *dcache = g_new(MemoryRegion, 1);
-    memory_region_init_ram(dcache, NULL, "esp32s3.dcache",
-                           memmap[ESP32S3_MEMREGION_DCACHE].size, &error_fatal);
-    memory_region_add_subregion(sys_mem, memmap[ESP32S3_MEMREGION_DCACHE].base, dcache);
 
     memory_region_init_ram(rtcslow, NULL, "esp32s3.rtcslow",
                            memmap[ESP32S3_MEMREGION_RTCSLOW].size, &error_fatal);
@@ -641,6 +645,9 @@ static void esp32s3_machine_init(MachineState *machine)
         if (blk) {
             esp32s3_init_spi_flash(ss, blk);
         }
+        if (machine->ram_size > 0) {
+            esp32s3_machine_init_psram(ss, (uint32_t) (machine->ram_size / MiB));
+        }
     }
 
     /* (Extmem) Cache realization */
@@ -648,14 +655,18 @@ static void esp32s3_machine_init(MachineState *machine)
         if (blk) {
             ss->cache.flash_blk = blk;
         }
+        if (ss->psram) {
+            ss->cache.psram = ss->psram;
+        }
         ss->cache.xts_aes = &ss->xts_aes;
         sysbus_realize(SYS_BUS_DEVICE(&ss->cache), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->cache), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_EXTMEM_BASE, mr, 0);
 
-        memory_region_add_subregion_overlap(sys_mem, ss->cache.dcache_base, &ss->cache.dcache, 0);
-        memory_region_add_subregion_overlap(sys_mem, ss->cache.icache_base, &ss->cache.icache, 0);
+        memory_region_add_subregion(sys_mem, memmap[ESP32S3_MEMREGION_DCACHE].base, &ss->cache.dcache);
+        memory_region_add_subregion(sys_mem, memmap[ESP32S3_MEMREGION_ICACHE].base, &ss->cache.icache);
     }
+
     /* eFuses realization */
     {
         sysbus_realize(SYS_BUS_DEVICE(&ss->efuse), &error_fatal);
@@ -893,9 +904,15 @@ static ram_addr_t esp32s3_fixup_ram_size(ram_addr_t requested_size)
         size = 2 * MiB;
     } else if (requested_size <= 4 * MiB ) {
         size = 4 * MiB;
+    } else if (requested_size <= 8 * MiB ) {
+        size = 8 * MiB;
+    } else if (requested_size <= 16 * MiB ) {
+        size = 16 * MiB;
+    } else if (requested_size <= 32 * MiB ) {
+        size = 32 * MiB;
     } else {
-        qemu_log("RAM size larger than 4 MB not supported\n");
-        size = 4 * MiB;
+        qemu_log("RAM size larger than 32 MB not supported\n");
+        size = 32 * MiB;
     }
     return size;
 }

@@ -14,6 +14,7 @@
 #include "hw/hw.h"
 #include "hw/registerfields.h"
 #include "hw/misc/esp32s3_xts_aes.h"
+#include "hw/misc/ssi_psram.h"
 
 #define TYPE_ESP32S3_CACHE "esp32s3.icache"
 #define TYPE_ESP32S3_DCACHE "esp32s3.dcache"
@@ -40,11 +41,20 @@
 /* Number of entries count in the table size */
 #define ESP32S3_MMU_TABLE_ENTRY_COUNT (ESP32S3_MMU_SIZE/sizeof(uint32_t))
 
+/**
+ * On the ESP32S3, we have at most 16384 pages of 64KB, so a physical address space of 1GB.
+ */
+#define ESP32S3_MMU_PAGE_MAX    16384
+
+#define ESP32S3_MMU_TYPE_FLASH  0
+#define ESP32S3_MMU_TYPE_PSRAM  1
+
 typedef union ESP32S3MMUEntry {
     struct {
-        uint32_t    page_number : 8;
+        uint32_t    page_number : 14;
         uint32_t    invalid     : 1;
-        uint32_t    reserved    : 23;   /* Must always be 0 */
+        uint32_t    type        : 1;    /* 0 for flash, 1 for PSRAM */
+        uint32_t    reserved    : 16;   /* Must always be 0 */
     };
     uint32_t val;
 } ESP32S3MMUEntry;
@@ -52,9 +62,8 @@ typedef union ESP32S3MMUEntry {
 _Static_assert(sizeof(ESP32S3MMUEntry) == sizeof(uint32_t), "MMU Entry size must be 4 bytes");
 
 /**
- * The external memory region on the ESP32-C3 is 2x32MB, but both regions are shared (data & instructions)
+ * The external memory region on the ESP32-S3 is 2x32MB, but both regions are shared (data & instructions)
  */
-// #define ESP32S3_EXTMEM_REGION_SIZE        0x800000
 #define ESP32S3_EXTMEM_REGION_SIZE        0x2000000
 
 /**
@@ -83,12 +92,11 @@ _Static_assert(sizeof(ESP32S3MMUEntry) == sizeof(uint32_t), "MMU Entry size must
 typedef struct {
     SysBusDevice parent;
     BlockBackend *flash_blk;
+    SsiPsramState *psram;
     MemoryRegion iomem;
 
     bool         icache_enable;
     bool         dcache_enable;
-    hwaddr       dcache_base;
-    hwaddr       icache_base;
     MemoryRegion dcache;
     MemoryRegion icache;
 

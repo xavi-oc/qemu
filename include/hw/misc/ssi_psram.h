@@ -8,9 +8,11 @@
 typedef struct SsiPsramState {
     SSIPeripheral parent_obj;
     uint32_t size_mbytes;
-    int dummy;
+    uint32_t dummy;
     int command;
     int byte_count;
+    /* Array representing the RAM */
+    uint8_t* data;
 } SsiPsramState;
 
 #define TYPE_SSI_PSRAM "ssi_psram"

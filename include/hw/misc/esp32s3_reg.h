@@ -70,13 +70,13 @@
 #define DR_REG_INTERRUPT_BASE                   0x600C2000
 #define DR_REG_AES_XTS_BASE                     0x600CC000
 #define DR_REG_EXTMEM_BASE                      0x600C4000
+#define DR_REG_MMU_TABLE                        0x600C5000
 #define DR_REG_ASSIST_DEBUG_BASE                0x600CE000
 #define DR_REG_WCL_BASE                         0x600D0000
 #define ESP_CACHE_TEMP_ADDR                     0x3C800000
 #define DR_REG_EMAC_BASE                        0x600CD000
 #define DR_REG_WDEV_BASE                        0x3ff75000
 
-#define DR_REG_MMU_TABLE                        0x600c5000
 
 #define ESP32S3_IO_START_ADDR                   (DR_REG_UART_BASE)
 

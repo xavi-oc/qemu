@@ -1,7 +1,7 @@
 /*
  * ESP-PSRAM basic emulation
  *
- * Copyright (c) 2021 Espressif Systems (Shanghai) Co. Ltd.
+ * Copyright (c) 2021-2024 Espressif Systems (Shanghai) Co. Ltd.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 or
@@ -12,6 +12,7 @@
 #include "qemu/log.h"
 #include "hw/irq.h"
 #include "qemu/module.h"
+#include "qemu/error-report.h"
 #include "hw/qdev-properties.h"
 #include "hw/misc/ssi_psram.h"
 
@@ -82,11 +83,21 @@ static int psram_cs(SSIPeripheral *ss, bool select)
 static void psram_realize(SSIPeripheral *ss, Error **errp)
 {
     SsiPsramState *s = SSI_PSRAM(ss);
-    s->dummy = 1;
+    /* Make sure the given size is supported */
+    if (get_eid_by_size(s->size_mbytes) == 0) {
+        error_report("[PSRAM] Invalid size %dMB for the PSRAM", s->size_mbytes);
+    }
+
+    /* Allocate the actual array that will act as a vritual RAM */
+    s->data = g_malloc(s->size_mbytes * 1024 * 1024);
+    if (s->data == NULL) {
+        error_report("[PSRAM] Could not allocate memory!");
+    }
 }
 
 static Property psram_properties[] = {
     DEFINE_PROP_UINT32("size_mbytes", SsiPsramState, size_mbytes, 4),
+    DEFINE_PROP_UINT32("dummy", SsiPsramState, dummy, 1),
     DEFINE_PROP_END_OF_LIST(),
 };
 

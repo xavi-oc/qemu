@@ -44,6 +44,7 @@ typedef struct ESP32S3SpiState {
     uint32_t mem_rd_st;
     uint32_t data_reg[ESP32S3_SPI_BUF_WORDS];
     uint32_t mem_sus_st;
+    uint32_t misc;
     ESP32S3XtsAesState *xts_aes;
 } ESP32S3SpiState;
 
@@ -83,6 +84,7 @@ REG32(SPI_MEM_CTRL, 0x008)
     FIELD(SPI_MEM_CTRL, FASTRD_MODE, 13, 1)
     FIELD(SPI_MEM_CTRL, TX_CRC_EN, 11, 1)
     FIELD(SPI_MEM_CTRL, FCS_CRC_EN, 10, 1)
+    FIELD(SPI_MEM_CTRL, FCMD_OCT, 9, 1)
     FIELD(SPI_MEM_CTRL, FCMD_QUAD, 8, 1)
     FIELD(SPI_MEM_CTRL, FCMD_DUAL, 7, 1)
     FIELD(SPI_MEM_CTRL, FDUMMY_OUT, 3, 1)
@@ -138,6 +140,7 @@ REG32(SPI_MEM_RD_STATUS, 0x02C)
 REG32(SPI_MEM_MISC, 0x034)
     FIELD(SPI_MEM_MISC, CS_KEEP_ACTIVE, 10, 1)
     FIELD(SPI_MEM_MISC, CK_IDLE_EDGE, 9, 1)
+    /* The following chip select lines are active-low */
     FIELD(SPI_MEM_MISC, CS1_DIS, 1, 1)
     FIELD(SPI_MEM_MISC, CS0_DIS, 0, 1)
 
