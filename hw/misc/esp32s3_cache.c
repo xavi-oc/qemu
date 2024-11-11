@@ -104,7 +104,7 @@ static inline void esp32s3_write_mmu_value(ESP32S3CacheState *s, hwaddr reg_addr
             const uint32_t virtaddr = index * ESP32S3_PAGE_SIZE;
             esp32s3_mmu_invalidate_page(s, virtaddr, former_physaddr, former.type == ESP32S3_MMU_TYPE_PSRAM);
         } else {
-            if (e.type == ESP32S3_MMU_TYPE_FLASH) {
+            if (e.type == ESP32S3_MMU_TYPE_FLASH && s->flash_blk != NULL) {
                 uint8_t* cache_data = ((uint8_t*) memory_region_get_ram_ptr(&s->flash_mr)) + physical_address;
                 blk_pread(s->flash_blk, physical_address, ESP32S3_PAGE_SIZE, cache_data, 0);
 
@@ -301,24 +301,19 @@ static void esp32s3_cache_realize(DeviceState *dev, Error **errp)
         error_report("[CACHE] XTS_AES controller must be set!");
     }
 
-    /* We need the flash block to initialize our memory region, so we can only initialize the IOMMU address space now */
-    if (s->flash_blk == NULL) {
-        error_report("[CACHE] Flash block must be set!");
+    if (s->flash_blk != NULL) {
+        /* There is no way to have a MemoryRegion bound to a block device, nor a protable way to have a MemoryRegion
+        * region mmap-ed to a file (POSIX systems only). So workaround this by defining some RAM that will be filled
+        * with the flash block content every time a map is requested */
+        memory_region_init_ram(&s->flash_mr, OBJECT(s), "esp32s3.cache.flash_mr",
+                            blk_getlength(s->flash_blk), &error_fatal);
+
+        /* Initialize the address space that will contain the flash MemoryRegion */
+        address_space_init(&s->flash_as, &s->flash_mr, "esp32s3.cache.flash_as");
     }
 
-    /* There is no way to have a MemoryRegion bound to a block device, nor a protable way to have a MemoryRegion
-     * region mmap-ed to a file (POSIX systems only). So workaround this by defining some RAM that will be filled
-     * with the flash block content every time a map is requested */
-    memory_region_init_ram(&s->flash_mr, OBJECT(s), "esp32s3.cache.flash_mr",
-                           blk_getlength(s->flash_blk), &error_fatal);
-
-    /* PSRAM memory region is already ready, initialize the address space that will contain */
-
-    /* Initialize the address space that will contain the flash MemoryRegion */
-    address_space_init(&s->flash_as, &s->flash_mr, "esp32s3.cache.flash_as");
-
-    if (s->psram) {
-        /* Initialize the physical address space for the PSRAM, this will be referenced by the IOMMU */
+    if (s->psram != NULL) {
+        /* Initialize the physical address space for the PSRAM, this will be referenced by the IOMMU. */
         address_space_init(&s->psram_as, &s->psram->data_mr, "esp32s3.cache.psram_as");
     }
 }
@@ -402,7 +397,7 @@ static IOMMUTLBEntry esp32s3_mmu_region_translate(IOMMUMemoryRegion *iommu, hwad
         /* If there is no PSRAM connected to the machine, give no permission to the address space */
         ret.perm = (s->psram == NULL) ? IOMMU_NONE : IOMMU_RW;
     } else {
-        ret.perm = IOMMU_RO;
+        ret.perm = (s->flash_blk == NULL) ? IOMMU_NONE : IOMMU_RO;
     }
 
 #if CACHE_DEBUG
