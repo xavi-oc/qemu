@@ -61,6 +61,7 @@
 #include "hw/timer/esp32s3_systimer.h"
 #include "hw/gpio/esp32s3_gpio.h"
 #include "hw/misc/esp32s3_xts_aes.h"
+#include "hw/misc/esp32s3_pms.h"
 
 #include "cpu_esp32s3.h"
 
@@ -138,6 +139,7 @@ typedef struct Esp32s3SocState {
     ESP32S3RsaState rsa;
     ESP32S3HmacState hmac;
     ESP32S3DsState ds;
+    ESP32S3PmsState pms;
 
     ESP32S3XtsAesState xts_aes;
     ESP32C3TimgState timg[2];
@@ -612,6 +614,7 @@ static void esp32s3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(ss), "rsa", &ss->rsa, TYPE_ESP32S3_RSA);
     object_initialize_child(OBJECT(ss), "hmac", &ss->hmac, TYPE_ESP32S3_HMAC);
     object_initialize_child(OBJECT(ss), "ds", &ss->ds, TYPE_ESP32S3_DS);
+    object_initialize_child(OBJECT(ss), "pms", &ss->pms, TYPE_ESP32S3_PMS);
 
     object_initialize_child(OBJECT(ss), "xts_aes", &ss->xts_aes, TYPE_ESP32S3_XTS_AES);
     object_initialize_child(OBJECT(ss), "timg0", &ss->timg[0], TYPE_ESP32C3_TIMG);
@@ -775,6 +778,12 @@ static void esp32s3_machine_init(MachineState *machine)
         memory_region_add_subregion_overlap(sys_mem, DR_REG_RSA_BASE, mr, 0);
         sysbus_connect_irq(SYS_BUS_DEVICE(&ss->rsa), 0,
                            qdev_get_gpio_in(intmatrix_dev, ETS_RSA_INTR_SOURCE));
+    }
+    /* PMS realization */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ss->pms), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ss->pms), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_SENSITIVE_BASE, mr, 0);
     }
 
     /* HMAC realization */
