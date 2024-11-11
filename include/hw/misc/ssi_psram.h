@@ -4,6 +4,7 @@
 #include "hw/sysbus.h"
 #include "hw/ssi/ssi.h"
 #include "qom/object.h"
+#include "exec/memory.h"
 
 typedef struct SsiPsramState {
     SSIPeripheral parent_obj;
@@ -11,8 +12,7 @@ typedef struct SsiPsramState {
     uint32_t dummy;
     int command;
     int byte_count;
-    /* Array representing the RAM */
-    uint8_t* data;
+    MemoryRegion data_mr;
 } SsiPsramState;
 
 #define TYPE_SSI_PSRAM "ssi_psram"

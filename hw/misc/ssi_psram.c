@@ -10,6 +10,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
+#include "qapi/error.h"
 #include "hw/irq.h"
 #include "qemu/module.h"
 #include "qemu/error-report.h"
@@ -89,10 +90,8 @@ static void psram_realize(SSIPeripheral *ss, Error **errp)
     }
 
     /* Allocate the actual array that will act as a vritual RAM */
-    s->data = g_malloc(s->size_mbytes * 1024 * 1024);
-    if (s->data == NULL) {
-        error_report("[PSRAM] Could not allocate memory!");
-    }
+    const uint32_t size_bytes = s->size_mbytes * 1024 * 1024;
+    memory_region_init_ram(&s->data_mr, OBJECT(s), "psram.memory_region", size_bytes, &error_fatal);
 }
 
 static Property psram_properties[] = {

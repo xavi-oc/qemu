@@ -15,6 +15,7 @@
 #include "qemu/timer.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "exec/address-spaces.h"
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "hw/irq.h"
@@ -56,6 +57,31 @@ static inline uint32_t esp32s3_read_mmu_value(ESP32S3CacheState *s, hwaddr reg_a
 }
 
 
+static void esp32s3_mmu_invalidate_page(ESP32S3CacheState *s, hwaddr virt_addr, hwaddr phys_addr, bool is_psram)
+{
+    IOMMUTLBEvent event = {
+        .type = IOMMU_NOTIFIER_UNMAP,
+        .entry = {
+            .target_as = is_psram ? &s->psram_as : &s->flash_as,
+            .iova = virt_addr,
+            .translated_addr = phys_addr,
+            .addr_mask = ESP32S3_PAGE_SIZE - 1,
+        }
+    };
+    memory_region_notify_iommu(&s->iommu, 0, event);
+
+    /* If the page was mapped to flash, clear the content */
+    if (!is_psram) {
+        const uint32_t invalid_value = 0xdeadbeef;
+        uint32_t* cache_word_data = (void*) ((uintptr_t) memory_region_get_ram_ptr(&s->flash_mr) + phys_addr);
+
+        for (int i = 0; i < ESP32S3_PAGE_SIZE / sizeof(invalid_value); i++) {
+            cache_word_data[i] = invalid_value;
+        }
+    }
+}
+
+
 static inline void esp32s3_write_mmu_value(ESP32S3CacheState *s, hwaddr reg_addr, uint32_t value)
 {
     ESP32S3XtsAesClass *xts_aes_class = ESP32S3_XTS_AES_GET_CLASS(s->xts_aes);
@@ -66,39 +92,25 @@ static inline void esp32s3_write_mmu_value(ESP32S3CacheState *s, hwaddr reg_addr
     const ESP32S3MMUEntry former = s->mmu[index];
     /* Always keep reserved as 0 */
     e.reserved = 0;
-    // info_report("[CACHE] esp32s3_write_mmu_value 0x%lx = %08x, index=%i", reg_addr, value, index);
+#if CACHE_DEBUG
+    info_report("[CACHE] esp32s3_write_mmu_value 0x%lx = %08x, index=%d", reg_addr, value, index);
+#endif
     if (former.val != e.val) {
-        /* Update the cache (MemoryRegion) */
-        const uint32_t virtual_address = index * ESP32S3_PAGE_SIZE;
         /* The entry contains the index of the 64KB block from the flash memory */
         const uint32_t physical_address = e.page_number * ESP32S3_PAGE_SIZE;
-        /* We can reference dcache or icache, both are the same memory underneath */
-        uint8_t* cache_data = ((uint8_t*) memory_region_get_ram_ptr(&s->dcache)) + virtual_address;
 
         if (e.invalid) {
-            const uint32_t invalid_value = 0xdeadbeef;
-            uint32_t* cache_word_data = (uint32_t*) cache_data;
-            for (int i = 0; i < ESP32S3_PAGE_SIZE / sizeof(invalid_value); i++) {
-                cache_word_data[i] = invalid_value;
-            }
+            const uint32_t former_physaddr = former.page_number * ESP32S3_PAGE_SIZE;
+            const uint32_t virtaddr = index * ESP32S3_PAGE_SIZE;
+            esp32s3_mmu_invalidate_page(s, virtaddr, former_physaddr, former.type == ESP32S3_MMU_TYPE_PSRAM);
         } else {
-            /* Before mapping the new MMU page, check if we have to writeback the former content, this only applies
-             * for PSRAM of course. */
-            if (!former.invalid && former.type == ESP32S3_MMU_TYPE_PSRAM) {
-                const uint32_t former_addr = former.page_number * ESP32S3_PAGE_SIZE;
-                memcpy(s->psram->data + former_addr, cache_data, ESP32S3_PAGE_SIZE);
-            }
-
-            if (e.type == ESP32S3_MMU_TYPE_PSRAM) {
-                /* PSRAM needs to be mapped */
-                memcpy(cache_data, s->psram->data + physical_address, ESP32S3_PAGE_SIZE);
-            } else if (s->flash_blk != NULL) {
-                /* Flash needs to be mapped */
+            if (e.type == ESP32S3_MMU_TYPE_FLASH) {
+                uint8_t* cache_data = ((uint8_t*) memory_region_get_ram_ptr(&s->flash_mr)) + physical_address;
                 blk_pread(s->flash_blk, physical_address, ESP32S3_PAGE_SIZE, cache_data, 0);
-            }
 
-            if (xts_aes_class->is_flash_enc_enabled(s->xts_aes)) {
-                xts_aes_class->decrypt(s->xts_aes, physical_address, cache_data, ESP32S3_PAGE_SIZE);
+                if (xts_aes_class->is_flash_enc_enabled(s->xts_aes)) {
+                    xts_aes_class->decrypt(s->xts_aes, physical_address, cache_data, ESP32S3_PAGE_SIZE);
+                }
             }
         }
         s->mmu[index].val = e.val;
@@ -288,6 +300,27 @@ static void esp32s3_cache_realize(DeviceState *dev, Error **errp)
     if (s->xts_aes == NULL) {
         error_report("[CACHE] XTS_AES controller must be set!");
     }
+
+    /* We need the flash block to initialize our memory region, so we can only initialize the IOMMU address space now */
+    if (s->flash_blk == NULL) {
+        error_report("[CACHE] Flash block must be set!");
+    }
+
+    /* There is no way to have a MemoryRegion bound to a block device, nor a protable way to have a MemoryRegion
+     * region mmap-ed to a file (POSIX systems only). So workaround this by defining some RAM that will be filled
+     * with the flash block content every time a map is requested */
+    memory_region_init_ram(&s->flash_mr, OBJECT(s), "esp32s3.cache.flash_mr",
+                           blk_getlength(s->flash_blk), &error_fatal);
+
+    /* PSRAM memory region is already ready, initialize the address space that will contain */
+
+    /* Initialize the address space that will contain the flash MemoryRegion */
+    address_space_init(&s->flash_as, &s->flash_mr, "esp32s3.cache.flash_as");
+
+    if (s->psram) {
+        /* Initialize the physical address space for the PSRAM, this will be referenced by the IOMMU */
+        address_space_init(&s->psram_as, &s->psram->data_mr, "esp32s3.cache.psram_as");
+    }
 }
 
 static void esp32s3_cache_init(Object *obj)
@@ -301,8 +334,16 @@ static void esp32s3_cache_init(Object *obj)
                           TYPE_ESP32S3_CACHE, TYPE_ESP32S3_CACHE_IO_SIZE + ESP32S3_MMU_SIZE);
 
     /* Initialize the dcache and icache cache areas, they are aliases of eachother */
-    memory_region_init_ram(&s->dcache, OBJECT(s), "esp32s3.dcache",
-                           ESP32S3_EXTMEM_REGION_SIZE, &error_fatal);
+    memory_region_init_iommu(&s->iommu,
+                            sizeof(s->iommu),
+                            TYPE_ESP32S3_MMU_REGION,
+                            OBJECT(s),
+                            "esp32s3_iommu", ESP32S3_EXTMEM_REGION_SIZE);
+
+    /* The Dcache and the Icache are just aliases to the iommu memory region since all the accesses will require
+     * to go through a translation. */
+    memory_region_init_alias(&s->dcache, OBJECT(s), "esp32s3.dcache",
+                           MEMORY_REGION(&s->iommu), 0, ESP32S3_EXTMEM_REGION_SIZE);
     memory_region_init_alias(&s->icache, OBJECT(s), "esp32s3.icache",
                            &s->dcache, 0, ESP32S3_EXTMEM_REGION_SIZE);
 
@@ -330,9 +371,82 @@ static const TypeInfo esp32s3_cache_info = {
     .class_init = esp32s3_cache_class_init
 };
 
+
+static uint64_t esp32s3_mmu_region_page_size(IOMMUMemoryRegion *iommu)
+{
+    return ESP32S3_PAGE_SIZE;
+}
+
+static IOMMUTLBEntry esp32s3_mmu_region_translate(IOMMUMemoryRegion *iommu, hwaddr addr,
+                                                  IOMMUAccessFlags flag, int iommu_idx)
+{
+    ESP32S3CacheState *s = container_of(iommu, ESP32S3CacheState, iommu);
+
+    IOMMUTLBEntry ret = {
+        /* Flash address space by default (most likely) */
+        .target_as = &s->flash_as,
+        .iova = addr,
+        .addr_mask = ESP32S3_PAGE_SIZE - 1,
+    };
+
+    /* Check which page is being written */
+    const uint32_t index = addr / ESP32S3_PAGE_SIZE;
+    const uint32_t offset = addr % ESP32S3_PAGE_SIZE;
+    const ESP32S3MMUEntry entry = s->mmu[index];
+
+    const uint32_t physical_address = entry.page_number * ESP32S3_PAGE_SIZE + offset;
+
+    ret.translated_addr = physical_address;
+    if (entry.type == ESP32S3_MMU_TYPE_PSRAM) {
+        ret.target_as = &s->psram_as;
+        /* If there is no PSRAM connected to the machine, give no permission to the address space */
+        ret.perm = (s->psram == NULL) ? IOMMU_NONE : IOMMU_RW;
+    } else {
+        ret.perm = IOMMU_RO;
+    }
+
+#if CACHE_DEBUG
+    printf("\t[MMU] Translation: %08lx => %08x (idx: %d, val: %x, offset: %08x)\n", addr, physical_address, index, entry.val, s->iommu_psram_offset);
+#endif
+    return ret;
+}
+
+static int esp32s3_mmu_region_attrs_to_index(IOMMUMemoryRegion *iommu, MemTxAttrs attrs)
+{
+    return 0;
+}
+
+
+static int esp32s3_mmu_region_notify_flag_changed(IOMMUMemoryRegion *iommu,
+                                                  IOMMUNotifierFlag old,
+                                                  IOMMUNotifierFlag new,
+                                                  Error **errp)
+{
+    return 0;
+}
+
+
+static void esp32s3_mmu_region_class_init(ObjectClass *klass, void *data)
+{
+    IOMMUMemoryRegionClass *imrc = IOMMU_MEMORY_REGION_CLASS(klass);
+
+    imrc->translate = esp32s3_mmu_region_translate;
+    imrc->attrs_to_index = esp32s3_mmu_region_attrs_to_index;
+    imrc->get_min_page_size = esp32s3_mmu_region_page_size;
+    imrc->notify_flag_changed = esp32s3_mmu_region_notify_flag_changed;
+}
+
+static const TypeInfo esp32s3_mmu_region_info = {
+    .parent = TYPE_IOMMU_MEMORY_REGION,
+    .name = TYPE_ESP32S3_MMU_REGION,
+    .class_init = esp32s3_mmu_region_class_init,
+};
+
+
 static void esp32s3_cache_register_types(void)
 {
     type_register_static(&esp32s3_cache_info);
+    type_register_static(&esp32s3_mmu_region_info);
 }
 
 type_init(esp32s3_cache_register_types)

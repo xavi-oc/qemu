@@ -22,11 +22,13 @@
 #define ESP32S3_CACHE_GET_CLASS(obj) OBJECT_GET_CLASS(ESP32S3CacheState, obj, TYPE_ESP32S3_CACHE)
 #define ESP32S3_CACHE_CLASS(klass)   OBJECT_CLASS_CHECK(ESP32S3CacheState, klass, TYPE_ESP32S3_CACHE)
 
+#define TYPE_ESP32S3_MMU_REGION "esp32s3-mmu-region"
+
 #define ESP32S3_DCACHE_BASE 0x3c000000
 #define ESP32S3_ICACHE_BASE 0x42000000
 
 /* The MMU is shared between by both the ICache and the DCache */
-#define ESP32S3_MMU_SIZE 0x800
+#define ESP32S3_MMU_SIZE                        0x800
 #define ESP32S3_ICACHE_MMU_SIZE                 0x800
 #define ESP32S3_DCACHE_MMU_SIZE                 0x800
 
@@ -99,6 +101,15 @@ typedef struct {
     bool         dcache_enable;
     MemoryRegion dcache;
     MemoryRegion icache;
+
+    IOMMUMemoryRegion iommu; // Translation region that will be part of the system address space
+
+    /* Define an address space for the SPI flash */
+    AddressSpace flash_as;
+    /* Since there is no way to get a MemoryRegion out of a block device, use this memory region as a RO mirror */
+    MemoryRegion flash_mr;
+    /* Define an address space for the PSRAM, if not NULL */
+    AddressSpace psram_as;
 
     /* Registers for controlling the cache */
     uint32_t regs[ESP32S3_CACHE_REG_COUNT];
