@@ -21,6 +21,9 @@
 #define PSRAM_ID_MFG 0x0d
 #define PSRAM_ID_KGD 0x5d
 
+#define FAKE_16MB_ID    0x6a
+#define FAKE_32MB_ID    0x8e
+
 static int get_eid_by_size(uint32_t size_mbytes) {
     switch (size_mbytes)
     {
@@ -30,6 +33,10 @@ static int get_eid_by_size(uint32_t size_mbytes) {
         return 0x21;
     case 8:
         return 0x40;
+    case 16:
+        return FAKE_16MB_ID;
+    case 32:
+        return FAKE_32MB_ID;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: PSRAM size %" PRIu32 "MB not implemented\n",
                       __func__, size_mbytes);
