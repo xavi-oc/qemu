@@ -49,6 +49,7 @@
 #include "hw/misc/esp32c3_jtag.h"
 #include "hw/dma/esp32c3_gdma.h"
 #include "hw/display/esp_rgb.h"
+#include "hw/sensor/mq131.h"
 
 #define ESP32C3_IO_WARNING          0
 
@@ -88,6 +89,7 @@ struct Esp32C3MachineState {
     ESP32C3RtcCntlState rtccntl;
     ESP32C3UsbJtagState jtag;
     ESPRgbState rgb;
+    mq131State mq131;
 };
 
 /* Fake register used by ESP-IDF application to determine whether the code is running on real hardware or on QEMU */
@@ -132,7 +134,7 @@ static const struct MemmapEntry {
     [ESP32C3_MEMREGION_DCACHE]  = { 0x3c000000, 0x800000 },
     [ESP32C3_MEMREGION_ICACHE]  = { 0x42000000, 0x800000 },
     /* Virtual Framebuffer, used for the graphical interface */
-    [ESP32C3_MEMREGION_FRAMEBUF] = { 0x20000000, ESP_RGB_MAX_VRAM_SIZE }
+    [ESP32C3_MEMREGION_FRAMEBUF] = { 0x30000000, ESP_RGB_MAX_VRAM_SIZE },
 };
 
 
@@ -142,7 +144,7 @@ static bool addr_in_range(hwaddr addr, hwaddr start, hwaddr end)
 }
 
 static uint64_t esp32c3_io_read(void *opaque, hwaddr addr, unsigned int size)
-{
+{  
     if (addr_in_range(addr + ESP32C3_IO_START_ADDR, DR_REG_RTC_I2C_BASE, DR_REG_RTC_I2C_BASE + 0x100)) {
         return (uint32_t) 0xffffff;
     } else if (addr + ESP32C3_IO_START_ADDR == DR_REG_SYSCON_BASE + A_SYSCON_ORIGIN_REG) {
@@ -421,6 +423,7 @@ static void esp32c3_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(machine), "rtccntl", &ms->rtccntl, TYPE_ESP32C3_RTC_CNTL);
     object_initialize_child(OBJECT(machine), "jtag", &ms->jtag, TYPE_ESP32C3_JTAG);
     object_initialize_child(OBJECT(machine), "rgb", &ms->rgb, TYPE_ESP_RGB);
+    object_initialize_child(OBJECT(machine), "mq131", &ms->mq131, TYPE_MQ131);
 
     /* Realize all the I/O peripherals we depend on */
 
@@ -488,7 +491,7 @@ static void esp32c3_machine_init(MachineState *machine)
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->gpio), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_GPIO_BASE, mr, 0);
     }
-
+    
     /* (Extmem) Cache realization */
     {
         if (blk) {
@@ -644,6 +647,13 @@ static void esp32c3_machine_init(MachineState *machine)
         memory_region_add_subregion_overlap(sys_mem, DR_REG_FRAMEBUF_BASE, mr, 0);
         memory_region_add_subregion_overlap(sys_mem, esp32c3_memmap[ESP32C3_MEMREGION_FRAMEBUF].base, &ms->rgb.vram, 0);
     }
+
+    /* MQ131 realization */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ms->mq131), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(&ms->mq131), 0, 0x20000000);
+    }
+
 }
 
 
